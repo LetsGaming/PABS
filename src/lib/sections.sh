@@ -214,8 +214,9 @@ section_custom_scripts() {
     [[ -e /root/scripts ]] && backup_path "/root/scripts" "Root scripts folder"
 
     # back up the backup script itself so it travels with the backup
+    # BASH_SOURCE[0] is src/lib/sections.sh — strip /src/lib/* to reach project root
     local pabs_root
-    pabs_root="$(realpath "${BASH_SOURCE[0]%/lib/*}")"
+    pabs_root="$(realpath "${BASH_SOURCE[0]%/src/lib/*}")"
     backup_path "$pabs_root/backup.sh" "backup.sh"
 
     # config.sh is backed up with secrets redacted — the restored copy is useful
