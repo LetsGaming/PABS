@@ -1,0 +1,4 @@
+# Enforce LF line endings for shell scripts — CRLF causes subtle bugs in Bash
+# (heredocs, read operations, string comparisons).
+*.sh text eol=lf
+*.md text eol=lf

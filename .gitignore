@@ -1,0 +1,12 @@
+# User configuration — generated from config.template.sh by setup.sh.
+# Never tracked by git so that git pull never touches your settings.
+config.sh
+
+# Runtime artifacts
+/var/tmp/pabs-stage/
+*.lock
+
+# Editor and OS noise
+.DS_Store
+*.swp
+*~
