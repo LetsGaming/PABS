@@ -6,7 +6,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AGENT_SOURCE="$SCRIPT_DIR/vm-agent"
+AGENT_SOURCE="$SCRIPT_DIR/src/vm-agent"
 REMOTE_DIR="/opt/pabs-agent"
 SSH_KEY=""
 SSH_PORT=""
@@ -331,7 +331,7 @@ log "  User:   $SSH_USER"
 # the setup wizard uses. This keeps all config.sh write logic in one place.
 CONFIG="$CONFIG_FILE"
 # shellcheck source=setup/config_editor.sh
-source "$SCRIPT_DIR/setup/config_editor.sh"
+source "$SCRIPT_DIR/src/setup/config_editor.sh"
 
 ENTRY="${LABEL}  ${HOST_PART}  ${SSH_USER}  ${REMOTE_DIR}/agent.sh"
 

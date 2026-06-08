@@ -7,18 +7,20 @@
 # The only logic here is the top-level execution sequence.
 #
 # File layout:
-#   backup.sh              ← you are here (run this)
-#   config.sh              ← edit this to configure your setup
-#   setup.sh               ← interactive setup wizard (start here)
-#   lib/core.sh            ← logging, lock, trap, notifications
-#   lib/offsite.sh         ← rclone encryption, upload, retention pruning
-#   lib/preflight.sh       ← pre-flight validation checks
-#   lib/sections.sh        ← 8 backup section functions + helpers
-#   helpers/manifest.sh    ← SHA256 manifest generation/verification, rotation
-#   helpers/output.sh      ← generates restore script and README inside each backup
-#   vm-agent/agent.sh      ← deployed to VMs/LXCs for lightweight agent backups
-#   install-agent.sh       ← one-time setup: deploys vm-agent to a VM over SSH
-#   setup/                 ← wizard modules (ui, config_editor, step handlers)
+#   backup.sh                    ← you are here (run this)
+#   config.sh                    ← edit this to configure your setup
+#   setup.sh                     ← interactive setup wizard (start here)
+#   src/lib/core.sh              ← logging, lock, trap, notifications
+#   src/lib/offsite.sh           ← rclone encryption, upload, retention pruning
+#   src/lib/preflight.sh         ← pre-flight validation checks
+#   src/lib/sections.sh          ← 8 backup section functions + helpers
+#   src/lib/host_health.sh       ← Proxmox host drive health checks (SMART, NVMe, dmesg)
+#   src/lib/usb_health.sh        ← USB backup drive health checks
+#   src/helpers/manifest.sh      ← SHA256 manifest generation/verification, rotation
+#   src/helpers/output.sh        ← generates restore script and README inside each backup
+#   src/vm-agent/agent.sh        ← deployed to VMs/LXCs for lightweight agent backups
+#   install-agent.sh             ← one-time setup: deploys vm-agent to a VM over SSH
+#   src/setup/                   ← wizard modules (ui, config_editor, step handlers)
 #
 # Usage:
 #   ./backup.sh               — normal backup run
@@ -62,12 +64,12 @@ readonly SCRIPT_VERSION DATE
 
 # Source libs in dependency order:
 #   core.sh sets up logging and the ERR/EXIT trap; everything after needs log()
-source "$PABS_DIR/lib/core.sh"
-source "$PABS_DIR/lib/offsite.sh"
-source "$PABS_DIR/lib/preflight.sh"
-source "$PABS_DIR/lib/sections.sh"
-source "$PABS_DIR/helpers/manifest.sh"
-source "$PABS_DIR/helpers/output.sh"
+source "$PABS_DIR/src/lib/core.sh"
+source "$PABS_DIR/src/lib/offsite.sh"
+source "$PABS_DIR/src/lib/preflight.sh"
+source "$PABS_DIR/src/lib/sections.sh"
+source "$PABS_DIR/src/helpers/manifest.sh"
+source "$PABS_DIR/src/helpers/output.sh"
 
 # ---------------------------------------------------------------------------
 # Dry-run wrapper: logs what would run, skips all writes

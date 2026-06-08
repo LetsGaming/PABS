@@ -32,7 +32,8 @@ for arg in "$@"; do
 done
 
 source "$PABS_DIR/config.sh"
-source "$PABS_DIR/lib/usb_health.sh"
+source "$PABS_DIR/src/lib/usb_health.sh"
+source "$PABS_DIR/src/lib/host_health.sh"
 
 PASS="✓"; FAIL="✗"; WARN="⚠"
 OVERALL=0  # 0=OK, 1=error, 2=warning
@@ -111,6 +112,11 @@ if [[ -n "$LATEST" ]]; then
 else
     _warn "No backups found in $BACKUP_ROOT"
 fi
+
+# ---------------------------------------------------------------------------
+# Host drive health
+# ---------------------------------------------------------------------------
+host_health_check
 
 # ---------------------------------------------------------------------------
 # Local stage

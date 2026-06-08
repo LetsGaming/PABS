@@ -91,9 +91,9 @@ _do_update() {
 
     # Load UI + config helpers so _step_update can use _ok / _warn / _cfg_set_raw.
     # These may not be sourced yet when --update is the only argument passed.
-    source "$SCRIPT_DIR/setup/ui.sh"
-    source "$SCRIPT_DIR/setup/config_editor.sh"
-    source "$SCRIPT_DIR/setup/steps/update.sh"
+    source "$SCRIPT_DIR/src/setup/ui.sh"
+    source "$SCRIPT_DIR/src/setup/config_editor.sh"
+    source "$SCRIPT_DIR/src/setup/steps/update.sh"
 
     # Bootstrap config.sh from the template if this is somehow a first run
     if [[ ! -f "$CONFIG" ]]; then
@@ -140,11 +140,11 @@ export JUMP_STEP
 # Load shared modules
 # ---------------------------------------------------------------------------
 
-source "$SCRIPT_DIR/setup/ui.sh"
-source "$SCRIPT_DIR/setup/config_editor.sh"
+source "$SCRIPT_DIR/src/setup/ui.sh"
+source "$SCRIPT_DIR/src/setup/config_editor.sh"
 
 # Load all step modules
-for _step_file in "$SCRIPT_DIR"/setup/steps/*.sh; do
+for _step_file in "$SCRIPT_DIR"/src/setup/steps/*.sh; do
     source "$_step_file"
 done
 unset _step_file
