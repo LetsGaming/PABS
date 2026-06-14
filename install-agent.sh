@@ -7,7 +7,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_SOURCE="$SCRIPT_DIR/src/vm-agent"
-REMOTE_DIR="/opt/pabs-agent"
+REMOTE_DIR=""          # resolved after argument parsing; see below
 SSH_KEY=""
 SSH_PORT=""
 PABS_KNOWN_HOSTS="/root/.ssh/pabs_known_hosts"
@@ -89,6 +89,30 @@ fi
 # Derive host and user parts early — used throughout the rest of the script
 HOST_PART="${TARGET##*@}"
 SSH_USER="${TARGET%%@*}"
+
+# Resolve REMOTE_DIR now that SET_VARS and SSH_PORT are known.
+# HAOS agents must live under /config/ — the only path that survives HAOS
+# OS updates. /opt/, /etc/, and everything else in the add-on container is
+# wiped on update. /config/ is mounted from the persistent HA host storage.
+#
+# We detect HAOS by either:
+#   (a) the caller passed --set PABS_TYPE=haos, or
+#   (b) the caller passed --port 22222 (the SSH add-on default) without an
+#       explicit --dir override — port 22222 is only used by the HAOS SSH
+#       add-on; no other supported VM type uses it.
+if [[ -z "$REMOTE_DIR" ]]; then
+    _is_haos=false
+    for _sv in "${SET_VARS[@]:-}"; do
+        [[ "$_sv" == "PABS_TYPE=haos" ]] && _is_haos=true && break
+    done
+    [[ "$SSH_PORT" == "22222" ]] && _is_haos=true
+    if $_is_haos; then
+        REMOTE_DIR="/config/.pabs-agent"
+    else
+        REMOTE_DIR="/opt/pabs-agent"
+    fi
+    unset _is_haos _sv
+fi
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -241,9 +265,11 @@ fi
 # ---------------------------------------------------------------------------
 
 if [[ ${#SET_VARS[@]} -gt 0 ]]; then
-    log "Applying config overrides to /etc/pabs-agent/config ..."
-
-    AGENT_CONFIG="/etc/pabs-agent/config"
+    # The agent resolves its config file relative to its own directory first
+    # (see agent.sh AGENT_CONFIG resolution). Match that logic here so --set
+    # writes to the same file the agent will actually read.
+    AGENT_CONFIG="$REMOTE_DIR/config"
+    log "Applying config overrides to $AGENT_CONFIG ..."
 
     for kv in "${SET_VARS[@]}"; do
         local_key="${kv%%=*}"

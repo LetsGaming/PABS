@@ -42,7 +42,19 @@ set -Eeuo pipefail
 trap 'echo "[pabs-agent] FATAL: exited with code $? at line $LINENO (${BASH_COMMAND})" >&2' ERR
 
 AGENT_VERSION="1.0"
-AGENT_CONFIG="/etc/pabs-agent/config"
+# Config file path resolution:
+#   1. Prefer a config file co-located with the agent itself
+#      (e.g. /config/.pabs-agent/config on HAOS — survives OS updates because
+#       /config/ is the persistent HA host storage, not the add-on container).
+#   2. Fall back to /etc/pabs-agent/config for standard Linux VMs where the
+#       agent lives in /opt/pabs-agent/ and /etc/ is persistent.
+_AGENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$_AGENT_DIR/config" ]]; then
+    AGENT_CONFIG="$_AGENT_DIR/config"
+else
+    AGENT_CONFIG="/etc/pabs-agent/config"
+fi
+unset _AGENT_DIR
 STAGE_DIR=""
 
 # -----------------------------------------------------------------------------
@@ -181,7 +193,7 @@ do_install() {
     detected=$(detect_type)
 
     log "Installing PABS agent — detected type: $detected"
-    mkdir -p /etc/pabs-agent
+    mkdir -p "$(dirname "$AGENT_CONFIG")"
 
     cat > "$AGENT_CONFIG" << EOF
 # PABS Agent Configuration — $(hostname)

@@ -86,11 +86,13 @@ Copy the `VM_AGENTS` line printed by `install-agent.sh`:
 ```bash
 VM_AGENTS=(
     "docker-vm    192.168.1.10   root     /opt/pabs-agent/agent.sh"
-    "haos         192.168.1.20   root     /opt/pabs-agent/agent.sh"
+    "haos         192.168.1.20   root     /config/.pabs-agent/agent.sh"
     "pihole-lxc   192.168.1.30   root     /opt/pabs-agent/agent.sh"
     "mc-server    192.168.1.40   alice    /opt/pabs-agent/agent.sh"
 )
 ```
+
+> **HAOS note:** the agent path for HAOS is `/config/.pabs-agent/agent.sh`, not `/opt/pabs-agent/agent.sh`. `install-agent.sh` prints and registers the correct path automatically when you pass `--set PABS_TYPE=haos` or `--port 22222`.
 
 ### Step 3 — Test
 
@@ -164,6 +166,14 @@ To update a setting after initial installation, re-run `install-agent.sh` with t
 
 The PABS agent runs inside the **SSH & Web Terminal add-on** shell. This is not the same as SSH access to the HAOS VM itself — HAOS does not expose a standard Linux SSH server. The add-on is required.
 
+#### Why the agent lives in `/config/.pabs-agent/`
+
+HAOS OS updates regenerate the add-on container from scratch. Any files written into the container's own filesystem — `/opt/`, `/etc/`, `/root/`, etc. — are wiped on every update. The only path that survives is `/config/`, which is mounted from the persistent HA host storage (the same directory that holds `configuration.yaml`).
+
+For this reason, `install-agent.sh` automatically installs the agent to `/config/.pabs-agent/` when it detects a HAOS target (via `--set PABS_TYPE=haos` or `--port 22222`). The agent reads its config from `/config/.pabs-agent/config` — also persistent. No manual redeploy after HAOS updates is required.
+
+The `VM_AGENTS` entry in `config.sh` will therefore point to `/config/.pabs-agent/agent.sh` instead of the usual `/opt/pabs-agent/agent.sh`. `install-agent.sh` prints and registers the correct path automatically.
+
 #### Prerequisites — SSH add-on setup
 
 **1. Install the add-on:**
@@ -174,7 +184,7 @@ Use the **"SSH & Web Terminal"** add-on by the Home Assistant team (not the lega
 
 **2. Configure and start the add-on:**
 
-In the add-on configuration, set an authorised key **or** a password. Using a key is strongly recommended:
+In the add-on configuration, set an authorised key. Using a key is strongly recommended — set it here in the add-on config UI (not by writing to `~/.ssh/authorized_keys` inside the shell, which would be lost on updates):
 
 ```yaml
 authorized_keys:
@@ -197,11 +207,16 @@ ssh -i /root/.ssh/id_ed25519_pabs_agent -p 22222 root@<haos-ip> "ha --version"
 
 If this returns a version string (e.g. `2024.11.0`), access is working.
 
-**4. Deploy the agent with the correct port:**
+**4. Deploy the agent:**
 
 ```bash
-./install-agent.sh root@<haos-ip>     --key /root/.ssh/id_ed25519_pabs_agent     --port 22222     --set PABS_TYPE=haos
+./install-agent.sh root@<haos-ip> \
+    --key /root/.ssh/id_ed25519_pabs_agent \
+    --port 22222 \
+    --set PABS_TYPE=haos
 ```
+
+`install-agent.sh` will install the agent to `/config/.pabs-agent/` and register the `VM_AGENTS` entry with the correct persistent path. No further action is needed after HAOS updates.
 
 > The `--port` flag passes `-p 22222` to the SSH and scp calls inside `install-agent.sh`. Without it, the connection attempt goes to port 22 which is not listening on HAOS.
 
@@ -232,12 +247,15 @@ Triggers a native HA snapshot via the `ha` CLI.
 ```bash
 # Full backup with encryption
 ./install-agent.sh root@192.168.1.20 \
-    --set HAOS_BACKUP_TYPE=full \
+    --port 22222 \
+    --set PABS_TYPE=haos \
     --set HAOS_BACKUP_PASSWORD=mysecretpassword \
     --set HAOS_KEEP_ON_HOST=2
 
 # Partial backup — HA config and SSL only
 ./install-agent.sh root@192.168.1.20 \
+    --port 22222 \
+    --set PABS_TYPE=haos \
     --set HAOS_BACKUP_TYPE=partial \
     --set HAOS_PARTIAL_FOLDERS=homeassistant,ssl
 ```
