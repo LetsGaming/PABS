@@ -144,6 +144,7 @@ source "$SCRIPT_DIR/src/setup/ui.sh"
 source "$SCRIPT_DIR/src/setup/config_editor.sh"
 
 # Load all step modules
+# shellcheck disable=SC1090  # dynamic: step modules discovered at runtime
 for _step_file in "$SCRIPT_DIR"/src/setup/steps/*.sh; do
     source "$_step_file"
 done

@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck and bats
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck bats
+
+      - name: ShellCheck (errors and warnings)
+        run: |
+          # SC2034 (appears-unused) is expected for config.sh variables that are
+          # consumed by sourcing scripts, so it is excluded.
+          find . -name '*.sh' -print0 \
+            | xargs -0 shellcheck -S warning -e SC2034
+
+      - name: Run BATS test suite
+        run: bats tests/pabs.bats

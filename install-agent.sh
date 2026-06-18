@@ -157,6 +157,7 @@ _check_dep() {
     local pkg="${2:-$1}"
     # Pass the script via stdin to avoid quoting and newline-escaping issues
     # with passing multi-line scripts as a single SSH argument.
+    # shellcheck disable=SC2087  # intentional: $tool/$pkg expand client-side before send
     ssh "${SSH_OPTS[@]}" "$TARGET" "bash -s" << SSHEOF
         if command -v ${tool} >/dev/null 2>&1; then
             exit 0
@@ -284,6 +285,7 @@ if [[ ${#SET_VARS[@]} -gt 0 ]]; then
         val_escaped="${val_escaped//|/\\|}"   # | is our sed delimiter
         val_escaped="${val_escaped//&/\\&}"   # & means "matched text" in sed replacement
 
+        # shellcheck disable=SC2087  # intentional: config key/value expand client-side
         ssh "${SSH_OPTS[@]}" "$TARGET" "bash -s" << SSHEOF
 CONFIG="$AGENT_CONFIG"
 KEY="$local_key"

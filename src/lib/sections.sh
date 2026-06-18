@@ -226,12 +226,16 @@ section_custom_scripts() {
     local config_dest="$STAGE_DIR/config.sh"
 
     if [[ -f "$config_src" ]]; then
-        sed \
-            -e 's|\(DISCORD_WEBHOOK=\)"\([^"]\+\)"|\1"<REDACTED>"|g' \
-            -e 's|\(NOTIFY_EMAIL=\)"\([^"]\+\)"|\1"<REDACTED>"|g' \
-            -e 's|\(PORTAINER_TOKEN=\)"\([^"]\+\)"|\1"<REDACTED>"|g' \
-            -e 's|\(RCLONE_ENCRYPTION_PASSWORD=\)"\([^"]\+\)"|\1"<REDACTED>"|g' \
-            -e '/[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]\|[Ss][Ee][Cc][Rr][Ee][Tt]\|_TOKEN\|_KEY\|WEBHOOK/s|="\([^"]\{4,\}\)"|="<REDACTED>"|g' \
+        # Redact secrets before the copy lands on USB. The USB medium may be
+        # lost or shared, so credentials must not travel with it.
+        #
+        # Covers double-quoted, single-quoted, and unquoted assignments. The
+        # value-bearing patterns each handle all three quote styles; the
+        # keyword-based catch-all matches any KEY whose name looks sensitive
+        # (PASSWORD / SECRET / _TOKEN / _KEY / WEBHOOK / PASSPHRASE).
+        sed -E \
+            -e 's#^([[:space:]]*(DISCORD_WEBHOOK|NOTIFY_EMAIL|PORTAINER_TOKEN|RCLONE_ENCRYPTION_PASSWORD|RCLONE_ENCRYPTION_SALT)[[:space:]]*=).*#\1"<REDACTED>"#' \
+            -e 's#^([[:space:]]*[A-Za-z_][A-Za-z0-9_]*([Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Pp][Aa][Ss][Ss][Pp][Hh][Rr][Aa][Ss][Ee]|[Ss][Ee][Cc][Rr][Ee][Tt]|_TOKEN|_KEY|WEBHOOK)[A-Za-z0-9_]*[[:space:]]*=).*#\1"<REDACTED>"#' \
             "$config_src" > "$config_dest"
         chmod 600 "$config_dest"
         log "  ✓ config.sh (secrets redacted)"
@@ -263,6 +267,14 @@ section_vm_agents() {
 
         if [[ -z "$label" || -z "$vm_host" || -z "$ssh_user" || -z "$agent_path" ]]; then
             log "  ⚠  Skipping malformed VM_AGENTS entry: '$entry'"
+            return 2
+        fi
+
+        # Label is used to build remote /tmp paths and the local subfolder name.
+        # Restrict it to a safe charset so it can never inject shell globs,
+        # spaces, or path separators into the remote rm / rsync commands below.
+        if [[ ! "$label" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            log "  ⚠  Skipping VM_AGENTS entry with unsafe label '$label' (allowed: A-Z a-z 0-9 . _ -)"
             return 2
         fi
 
@@ -313,10 +325,13 @@ section_vm_agents() {
             return 1
         fi
 
-        # Pull every file the agent listed
+        # Pull every file the agent listed.
+        # -s (--protect-args) stops the remote shell from word-splitting or
+        # glob-expanding the path, so filenames with spaces or metacharacters
+        # are pulled intact rather than silently truncated at the first space.
         local pull_ok=true
         for remote_file in "${remote_files[@]}"; do
-            if ! rsync -a -e "ssh ${ssh_opts[*]@Q}" \
+            if ! rsync -a -s -e "ssh ${ssh_opts[*]@Q}" \
                     "$ssh_user@$vm_host:$remote_file" "$local_dest/" 2>>"$LOG"; then
                 log "  ✗  [$label] rsync failed for $(basename "$remote_file")"
                 pull_ok=false

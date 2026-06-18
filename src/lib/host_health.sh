@@ -113,8 +113,21 @@ _host_check_dmesg() {
 
     local error_pattern="I/O error.*${disk_name}|blk_update_request.*${disk_name}|EXT.-fs error.*${disk_name}|${disk_name}.*error|nvme.*error.*${ctrl_name}|${ctrl_name}.*failed|Buffer I/O error.*${disk_name}"
 
+    # Source the kernel log. Prefer journalctl -k -b (the persistent journal for
+    # the current boot) when available — dmesg reads a fixed-size ring buffer
+    # that can wrap and silently drop old errors on busy systems. Fall back to
+    # dmesg where journald isn't present.
+    local log_source="kernel ring buffer"
+    local kernel_log
+    if command -v journalctl &>/dev/null && journalctl -k -b -n0 &>/dev/null; then
+        kernel_log=$(journalctl -k -b --no-pager 2>/dev/null || true)
+        log_source="kernel journal (this boot)"
+    else
+        kernel_log=$(dmesg 2>/dev/null || true)
+    fi
+
     local error_lines
-    error_lines=$(dmesg 2>/dev/null \
+    error_lines=$(printf '%s\n' "$kernel_log" \
         | grep -iE "$error_pattern" \
         | grep -v "^$" \
         | tail -5 \
@@ -124,9 +137,9 @@ _host_check_dmesg() {
     [[ -n "$error_lines" ]] && error_count=$(echo "$error_lines" | wc -l)
 
     if [[ $error_count -eq 0 ]]; then
-        _ok  "  Kernel log: no I/O errors for $disk_name since last boot"
+        _ok  "  Kernel log: no I/O errors for $disk_name (${log_source})"
     else
-        _fail "  Kernel log: ${error_count} I/O error(s) for $disk_name since last boot"
+        _fail "  Kernel log: ${error_count} I/O error(s) for $disk_name (${log_source})"
         echo "$error_lines" | while IFS= read -r line; do
             echo "          $line"
         done

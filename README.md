@@ -80,7 +80,7 @@ All data stages on the host SSD first, is SHA256-verified, then transferred to U
 | Atomic commit | Written to `<date>.tmp/` then renamed — power loss leaves a `.tmp/`, not a corrupt backup |
 | Dual verification | SHA256 manifest checked on SSD before transfer, re-checked on USB after |
 | Auto space recovery | Purges oldest backup if USB is full; refuses if it is the last copy |
-| Offsite sync | AES-256 via rclone crypt; failure is non-fatal, USB backup is always intact |
+| Offsite sync | AES-256 via GPG (symmetric passphrase or public-key); failure is non-fatal, USB backup is always intact |
 
 ---
 
@@ -113,6 +113,17 @@ Reports USB mount state, drive health (kernel I/O errors, filesystem error count
 
 Exit codes: `0` OK · `1` error · `2` warning.
 
+Add `--json` for machine-readable output (newline-delimited JSON, one object per check plus a summary) — suitable for a Prometheus textfile collector or log shipper.
+
+To re-verify a backup's integrity on demand (catching bit-rot between runs):
+
+```bash
+/opt/pabs/backup.sh --verify              # latest backup on USB
+/opt/pabs/backup.sh --verify=/path/to/backup-dir
+```
+
+Exit `0` if every checksum matches, `1` on corruption. Safe to schedule via cron between full backups.
+
 ---
 
 ## Documentation
@@ -139,11 +150,12 @@ pabs/
 ├── install-agent.sh     Deploys the VM agent to a guest over SSH (once per VM)
 ├── pabs-status.sh       Health check — USB, backup integrity, agents, offsite
 ├── docs/                Documentation
-├── lib/                 core.sh · offsite.sh · preflight.sh · sections.sh · usb_health.sh
-├── helpers/             manifest.sh · output.sh
-├── setup/               ui.sh · config_editor.sh · steps/
 ├── tests/               pabs.bats
-└── vm-agent/            agent.sh · types/ (docker · haos · minecraft · generic)
+└── src/
+    ├── lib/             core.sh · offsite.sh · preflight.sh · sections.sh · usb_health.sh · host_health.sh
+    ├── helpers/         manifest.sh · output.sh
+    ├── setup/           ui.sh · config_editor.sh · steps/
+    └── vm-agent/        agent.sh · types/ (docker · haos · minecraft · generic)
 ```
 
 </details>

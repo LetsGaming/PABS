@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # PABS — Proxmox Automated Backup System
-# Version 3.4
+# Version 3.5
 #
 # Entry point. Sources config and library files, then runs the backup.
 # The only logic here is the top-level execution sequence.
@@ -37,13 +37,20 @@ PABS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Argument parsing
 # ---------------------------------------------------------------------------
 DRY_RUN=false
+VERIFY_MODE=false
+VERIFY_TARGET=""
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=true ;;
+        --verify)  VERIFY_MODE=true ;;
+        --verify=*) VERIFY_MODE=true; VERIFY_TARGET="${arg#*=}" ;;
         --help|-h)
-            echo "Usage: $0 [--dry-run]"
+            echo "Usage: $0 [--dry-run] [--verify[=BACKUP_DIR]]"
             echo "  --dry-run  Run preflight checks and log what would be backed up."
             echo "             No files are written to staging or USB."
+            echo "  --verify   Verify the MANIFEST.sha256 of the latest backup on USB"
+            echo "             (or of =BACKUP_DIR if given) without running a backup."
+            echo "             Exit: 0 = all checksums OK, 1 = failure/corruption."
             exit 0
             ;;
         *) echo "Unknown argument: $arg"; exit 1 ;;
@@ -56,7 +63,7 @@ source "$PABS_DIR/config.sh"
 
 # Run-time vars — computed here so DATE is always the moment this run starts,
 # never the moment config.sh was last sourced.
-SCRIPT_VERSION="3.4"
+SCRIPT_VERSION="3.5"
 DATE=$(date +"%Y-%m-%d_%H-%M-%S")
 STAGE_DIR="$LOCAL_STAGE_BASE/.tmp-$DATE"
 FINAL_DIR="$BACKUP_ROOT/$DATE"
@@ -68,6 +75,7 @@ source "$PABS_DIR/src/lib/core.sh"
 source "$PABS_DIR/src/lib/offsite.sh"
 source "$PABS_DIR/src/lib/preflight.sh"
 source "$PABS_DIR/src/lib/sections.sh"
+source "$PABS_DIR/src/lib/validate.sh"
 source "$PABS_DIR/src/helpers/manifest.sh"
 source "$PABS_DIR/src/helpers/output.sh"
 
@@ -91,6 +99,37 @@ maybe_run() {
 
 check_root
 check_usb_mounted
+
+# ---------------------------------------------------------------------------
+# --verify mode: re-check a backup's manifest and exit. No lock, no writes.
+# This closes the loop on "is my backup actually restorable" by catching
+# bit-rot / silent USB corruption between backup runs, on demand or via cron.
+# ---------------------------------------------------------------------------
+if [[ "$VERIFY_MODE" == "true" ]]; then
+    target="$VERIFY_TARGET"
+    if [[ -z "$target" ]]; then
+        target=$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d ! -name '.*' ! -name '*.tmp' \
+            | sort | tail -1)
+    fi
+    [[ -n "$target" && -d "$target" ]] || die "No backup found to verify (looked in $BACKUP_ROOT)."
+    [[ -f "$target/MANIFEST.sha256" ]] || die "No MANIFEST.sha256 in $target — cannot verify."
+
+    log "Verifying backup: $target"
+    if ( cd "$target" && sha256sum --quiet --check MANIFEST.sha256 2>>"$LOG" ); then
+        file_count=$(wc -l < "$target/MANIFEST.sha256")
+        log "  ✓ Integrity OK — all $file_count file(s) match their checksums"
+        trap - ERR EXIT
+        exit 0
+    else
+        log_err "Integrity FAILURE in $target — checksums do not match. Backup may be corrupt."
+        dispatch_alert "VERIFY FAILED for $(basename "$target") — checksum mismatch. Backup may be corrupt."
+        trap - ERR EXIT
+        exit 1
+    fi
+fi
+
+# Validate config before doing anything destructive or slow.
+validate_config
 
 mkdir -p "$BACKUP_ROOT" "$LOCAL_STAGE_BASE"
 

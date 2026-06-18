@@ -221,6 +221,7 @@ _update_agent() {
     # Ensure required tools are present — an update may introduce a new dep.
     # Tries apt-get (Debian/Ubuntu), then apk (Alpine/HAOS), then warns.
     for _dep in rsync zstd python3; do
+        # shellcheck disable=SC2087  # intentional: $_dep expands client-side before send
         ssh "${ssh_opts[@]}" "$ssh_user@$vm_host" "bash -s" << SSHEOF 2>/dev/null || true
             command -v ${_dep} >/dev/null 2>&1 && exit 0
             if command -v apt-get >/dev/null 2>&1; then

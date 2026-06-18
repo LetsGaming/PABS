@@ -49,17 +49,27 @@ dispatch_alert() {
         json=$(python3 -c \
             'import json,sys; print(json.dumps({"content":sys.argv[1]}))' \
             "$full_msg")
-        curl -s -X POST \
+        # Delivery is best-effort and never fails the backup, but a permanently
+        # broken webhook should be discoverable — record the outcome in the log.
+        if curl -s -X POST \
              -H "Content-Type: application/json" \
              -d "$json" \
              --max-time 10 \
-             "$DISCORD_WEBHOOK" >/dev/null 2>&1 || true
+             "$DISCORD_WEBHOOK" >/dev/null 2>&1; then
+            : # delivered
+        else
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] (notify) Discord webhook delivery failed (non-fatal)" >> "$LOG" 2>/dev/null || true
+        fi
     fi
 
     # Fallback: local mail (failure alerts only — callers decide when to use this)
     if [[ -n "${NOTIFY_EMAIL:-}" ]]; then
-        echo "$full_msg" \
-            | mail -s "PABS Alert: $(hostname)" "$NOTIFY_EMAIL" 2>/dev/null || true
+        if echo "$full_msg" \
+            | mail -s "PABS Alert: $(hostname)" "$NOTIFY_EMAIL" 2>/dev/null; then
+            : # delivered
+        else
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] (notify) mail delivery to $NOTIFY_EMAIL failed (non-fatal)" >> "$LOG" 2>/dev/null || true
+        fi
     fi
 }
 
@@ -107,5 +117,23 @@ _on_exit() {
     fi
 }
 
-# Attach on source — backup.sh detaches/reattaches around the atomic commit
+# Signal handler — fires on Ctrl-C / kill even during the atomic-commit window
+# where the ERR/EXIT trap is intentionally detached. Without this, an interrupt
+# there would leave $LOCK_FILE behind and block the next run. A half-written USB
+# commit always lives under a .tmp suffix, so it is never mistaken for a complete
+# backup; we remove staging and any orphaned .tmp, release the lock, then exit.
+_on_signal() {
+    local sig="$1"
+    log "Received SIG${sig} — aborting and cleaning up..."
+    [[ -d "${STAGE_DIR:-}" ]] && rm -rf "$STAGE_DIR"
+    [[ -n "${FINAL_DIR:-}" && -d "${FINAL_DIR}.tmp" ]] && rm -rf "${FINAL_DIR}.tmp"
+    release_lock
+    trap - INT TERM ERR EXIT
+    exit 130
+}
+
+# Attach on source — backup.sh detaches/reattaches the ERR/EXIT pair around the
+# atomic commit, but INT/TERM stay armed for the whole run.
 trap '_on_exit' ERR EXIT
+trap '_on_signal INT'  INT
+trap '_on_signal TERM' TERM

@@ -29,8 +29,8 @@ _source_manifest() {
     log()      { echo "[LOG] $*" >> "$LOG"; }
     log_warn() { echo "[WARN] $*" >> "$LOG"; : $(( WARNINGS++ )); }
     log_err()  { echo "[ERR] $*"  >> "$LOG"; : $(( ERRORS++ )); }
-    # shellcheck source=../helpers/manifest.sh
-    source "$PABS_DIR/helpers/manifest.sh"
+    # shellcheck source=../src/helpers/manifest.sh
+    source "$PABS_DIR/src/helpers/manifest.sh"
 }
 
 _source_core() {
@@ -42,8 +42,8 @@ _source_core() {
     DISCORD_WEBHOOK=""
     NOTIFY_EMAIL=""
     WARNINGS=0; ERRORS=0
-    # shellcheck source=../lib/core.sh
-    source "$PABS_DIR/lib/core.sh"
+    # shellcheck source=../src/lib/core.sh
+    source "$PABS_DIR/src/lib/core.sh"
 }
 
 # Create N fake completed backup directories under BACKUP_ROOT
@@ -228,4 +228,68 @@ _make_backups() {
     [ "$ERRORS" -eq 1 ]
     log_err "second"
     [ "$ERRORS" -eq 2 ]
+}
+
+# ---------------------------------------------------------------------------
+# Config validation (src/lib/validate.sh) — added in 3.5
+# ---------------------------------------------------------------------------
+
+_source_validate() {
+    USB_MOUNT="/mnt/x"; LOCAL_STAGE_BASE="/var/tmp/x"; BACKUP_ROOT="/mnt/x/p"
+    KEEP_BACKUPS=4; BACKUP_ZFS="true"
+    RCLONE_KEEP_MIN=1; RCLONE_KEEP_MAX=4; RCLONE_MAX_STORAGE_GB=0
+    VM_AGENTS=()
+    DIED=""
+    log()      { :; }
+    log_warn() { echo "WARN: $*"; }
+    log_err()  { echo "ERR: $*"; }
+    die()      { echo "DIE: $*"; exit 1; }
+    # shellcheck source=../src/lib/validate.sh
+    source "$PABS_DIR/src/lib/validate.sh"
+}
+
+@test "validate_config: passes on a clean config" {
+    _source_validate
+    run validate_config
+    [ "$status" -eq 0 ]
+}
+
+@test "validate_config: rejects non-integer KEEP_BACKUPS" {
+    _source_validate
+    KEEP_BACKUPS="abc"
+    run validate_config
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"KEEP_BACKUPS"* ]]
+}
+
+@test "validate_config: rejects invalid BACKUP_ZFS" {
+    _source_validate
+    BACKUP_ZFS="maybe"
+    run validate_config
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"BACKUP_ZFS"* ]]
+}
+
+@test "validate_config: rejects unsafe VM_AGENTS label" {
+    _source_validate
+    VM_AGENTS=("bad;label 1.2.3.4 root /opt/a.sh")
+    run validate_config
+    [ "$status" -ne 0 ]
+}
+
+@test "validate_config: rejects duplicate VM_AGENTS labels" {
+    _source_validate
+    VM_AGENTS=("vm1 1.2.3.4 root /opt/a.sh" "vm1 1.2.3.5 root /opt/a.sh")
+    run validate_config
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"duplicate"* ]]
+}
+
+@test "validate_config: gpg-key method requires a recipient" {
+    _source_validate
+    RCLONE_ENCRYPTION_METHOD="gpg-key"
+    RCLONE_ENCRYPTION_RECIPIENT=""
+    run validate_config
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"RCLONE_ENCRYPTION_RECIPIENT"* ]]
 }

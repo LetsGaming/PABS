@@ -45,17 +45,92 @@ _step_usb() {
                 umount "$format_dev" 2>/dev/null || true
 
                 local vol_label="PABS-BACKUP"
-                _info "Formatting $format_dev as ext4 (label: $vol_label)..."
 
-                if mkfs.ext4 -L "$vol_label" -m 0 "$format_dev" 2>&1 | sed 's/^/    /'; then
-                    _ok "Formatted $format_dev as ext4 (label: $vol_label)"
-                    _info "Enabling filesystem features for long-term USB use..."
-                    # Disable automatic fsck after N mounts — unnecessary for a backup drive
-                    # that PABS already monitors via the health check
-                    tune2fs -c 0 -i 0 "$format_dev" >/dev/null 2>&1 \
-                        && _ok "Disabled automatic fsck mount-count interval" || true
+                # --- Optional LUKS at-rest encryption -----------------------
+                # Wraps the partition in LUKS2 so the USB stick is unreadable
+                # if lost or stolen. A keyfile (root-only, 0400) is added so
+                # unattended cron backups can unlock the drive without a prompt;
+                # a passphrase is also set as a human-usable recovery factor.
+                echo ""
+                _info "LUKS encryption protects the USB contents if the stick is lost or stolen."
+                _info "PABS stores a root-only keyfile so scheduled backups unlock it automatically."
+                local use_luks=false
+                if _ask_yn "Encrypt this drive with LUKS (at-rest encryption)?" "n"; then
+                    if ! command -v cryptsetup &>/dev/null; then
+                        _warn "cryptsetup not installed — required for LUKS."
+                        if _ask_yn "Install cryptsetup now?" "y"; then
+                            apt-get install -y cryptsetup 2>&1 | sed 's/^/    /' \
+                                && _ok "cryptsetup installed" \
+                                || _warn "cryptsetup install failed — continuing without LUKS"
+                        fi
+                    fi
+                    command -v cryptsetup &>/dev/null && use_luks=true
+                fi
+
+                if $use_luks; then
+                    local keyfile="/etc/pabs/luks-${vol_label}.key"
+                    local mapper_name="pabs-${vol_label}"
+                    local luks_pw luks_pw2
+                    luks_pw=$(_ask_secret "LUKS recovery passphrase (also stored as keyfile)")
+                    luks_pw2=$(_ask_secret "Confirm passphrase")
+                    if [[ -z "$luks_pw" || "$luks_pw" != "$luks_pw2" ]]; then
+                        _err "Passphrase empty or mismatched — LUKS setup aborted, drive untouched"
+                        return
+                    fi
+
+                    _info "Creating LUKS2 container on $format_dev..."
+                    if printf '%s' "$luks_pw" | cryptsetup luksFormat --type luks2 --batch-mode "$format_dev" - 2>&1 | sed 's/^/    /'; then
+                        # Generate a random keyfile and register it as a second key slot
+                        mkdir -p /etc/pabs && chmod 700 /etc/pabs
+                        ( umask 077; head -c 64 /dev/urandom > "$keyfile" )
+                        chmod 400 "$keyfile"
+                        if printf '%s' "$luks_pw" | cryptsetup luksAddKey "$format_dev" "$keyfile" - 2>&1 | sed 's/^/    /'; then
+                            _ok "LUKS container created; keyfile at $keyfile (root-only)"
+                        else
+                            _warn "Could not add keyfile — unattended unlock will need the passphrase"
+                        fi
+
+                        # Open, format the mapper device, then close
+                        cryptsetup open --key-file "$keyfile" "$format_dev" "$mapper_name" 2>&1 | sed 's/^/    /'
+                        if mkfs.ext4 -L "$vol_label" -m 0 "/dev/mapper/$mapper_name" 2>&1 | sed 's/^/    /'; then
+                            tune2fs -c 0 -i 0 "/dev/mapper/$mapper_name" >/dev/null 2>&1 || true
+                            _ok "Formatted encrypted volume as ext4 (label: $vol_label)"
+                        else
+                            _warn "mkfs.ext4 on mapper failed"
+                        fi
+                        cryptsetup close "$mapper_name" 2>/dev/null || true
+
+                        # Persist crypttab so the drive auto-unlocks on boot via the keyfile.
+                        local luks_uuid
+                        luks_uuid=$(blkid -s UUID -o value "$format_dev" 2>/dev/null || true)
+                        if [[ -n "$luks_uuid" ]]; then
+                            if ! grep -q "$mapper_name" /etc/crypttab 2>/dev/null; then
+                                echo "$mapper_name UUID=$luks_uuid $keyfile luks,nofail" >> /etc/crypttab
+                                _ok "Added /etc/crypttab entry (auto-unlock on boot via keyfile)"
+                            fi
+                            _info "fstab should reference /dev/mapper/$mapper_name (handled below)."
+                            # Record the mapper device so the fstab step targets it.
+                            PABS_LUKS_MAPPER="/dev/mapper/$mapper_name"
+                            export PABS_LUKS_MAPPER
+                        fi
+                        echo ""
+                        _warn "IMPORTANT: keep the LUKS passphrase in your password manager."
+                        _warn "If $keyfile is lost, the passphrase is the only way back into the drive."
+                    else
+                        _err "luksFormat failed — drive may be in an inconsistent state. Check $format_dev."
+                    fi
                 else
-                    _warn "mkfs.ext4 failed — check the device name and try again"
+                    _info "Formatting $format_dev as ext4 (label: $vol_label)..."
+                    if mkfs.ext4 -L "$vol_label" -m 0 "$format_dev" 2>&1 | sed 's/^/    /'; then
+                        _ok "Formatted $format_dev as ext4 (label: $vol_label)"
+                        _info "Enabling filesystem features for long-term USB use..."
+                        # Disable automatic fsck after N mounts — unnecessary for a backup drive
+                        # that PABS already monitors via the health check
+                        tune2fs -c 0 -i 0 "$format_dev" >/dev/null 2>&1 \
+                            && _ok "Disabled automatic fsck mount-count interval" || true
+                    else
+                        _warn "mkfs.ext4 failed — check the device name and try again"
+                    fi
                 fi
             else
                 _info "Format cancelled"
@@ -154,8 +229,21 @@ _step_usb() {
 
     # --- fstab ---
     _step "Auto-mount on boot"
-    local uuid_for_fstab
-    uuid_for_fstab=$(_cfg_get "TARGET_UUID")
+
+    # When the drive was just LUKS-encrypted, the filesystem lives on the mapper
+    # device (unlocked at boot via /etc/crypttab), not the raw partition UUID.
+    if [[ -n "${PABS_LUKS_MAPPER:-}" ]]; then
+        if grep -q "$PABS_LUKS_MAPPER" /etc/fstab 2>/dev/null; then
+            _ok "fstab entry already present for $PABS_LUKS_MAPPER"
+        elif _ask_yn "Add fstab entry for the encrypted volume? (recommended)"; then
+            echo "$PABS_LUKS_MAPPER  $mount_point  ext4  defaults,nofail  0  0" >> /etc/fstab
+            _ok "fstab entry added (encrypted volume $PABS_LUKS_MAPPER)"
+            _info "crypttab unlocks the drive at boot; fstab then mounts the mapper device."
+            _info "Run 'systemctl daemon-reload && mount -a' to activate without rebooting."
+        fi
+    else
+        local uuid_for_fstab
+        uuid_for_fstab=$(_cfg_get "TARGET_UUID")
 
     if [[ -n "$uuid_for_fstab" ]]; then
         if grep -q "$uuid_for_fstab" /etc/fstab 2>/dev/null; then
@@ -174,6 +262,7 @@ _step_usb() {
         fi
     else
         _info "Skipping fstab (no TARGET_UUID set)"
+    fi
     fi
 
     # --- Retention ---

@@ -3,7 +3,7 @@
 # PABS Configuration Template
 # Copy to config.sh before editing. config.sh is .gitignored — git pulls
 # never touch your settings.
-# Proxmox Automated Backup System — v3.3
+# Proxmox Automated Backup System — v3.5
 #
 # This is the ONLY file you need to edit for a standard setup.
 # All other files are library code that should not require changes.
@@ -222,6 +222,28 @@ RCLONE_MAX_STORAGE_GB=0
 # ⚠  This value is automatically REDACTED in the config.sh copy written to
 #    USB, so it does not travel with the local backup.
 RCLONE_ENCRYPTION_PASSWORD=""
+
+# RCLONE_ENCRYPTION_METHOD — How to encrypt the offsite archive:
+#
+#   "symmetric"  (default) — AES-256 with RCLONE_ENCRYPTION_PASSWORD above.
+#                            Simple. The passphrase encrypts AND decrypts, so it
+#                            must be available on/near this host.
+#
+#   "gpg-key"              — Public-key (asymmetric) encryption to a recipient's
+#                            GPG public key. The PRIVATE key needed to decrypt
+#                            never lives on this host — stronger protection if
+#                            the host is compromised or the USB is lost.
+#                            Requires RCLONE_ENCRYPTION_RECIPIENT below, and the
+#                            recipient's PUBLIC key imported into root's keyring:
+#                              gpg --import recipient-public-key.asc
+#
+# Leave empty to use "symmetric".
+RCLONE_ENCRYPTION_METHOD=""
+
+# RCLONE_ENCRYPTION_RECIPIENT — Only used when RCLONE_ENCRYPTION_METHOD="gpg-key".
+# The key id, fingerprint, or email of the recipient public key to encrypt to.
+#   Example: RCLONE_ENCRYPTION_RECIPIENT="backups@example.com"
+RCLONE_ENCRYPTION_RECIPIENT=""
 
 # =============================================================================
 # INTERNAL VARS — do not edit below this line

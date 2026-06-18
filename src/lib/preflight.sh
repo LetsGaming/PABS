@@ -60,8 +60,14 @@ _estimate_backup_kb() {
     for path in /etc/pve /etc/network /etc/ssh /root/.ssh \
                 /etc/crontab /etc/cron.d /var/spool/cron/crontabs \
                 /etc/nftables.conf /etc/iptables /usr/local/bin /root/scripts; do
-        [[ -e "$path" ]] \
-            && needed_kb=$(( needed_kb + $(du -sk "$path" 2>/dev/null | cut -f1) ))
+        if [[ -e "$path" ]]; then
+            local path_kb
+            # du can print nothing on a permission error or a vanished-path race
+            # (e.g. live pmxcfs). Default to 0 so the arithmetic never aborts.
+            path_kb=$(du -sk "$path" 2>/dev/null | cut -f1)
+            [[ "$path_kb" =~ ^[0-9]+$ ]] || path_kb=0
+            needed_kb=$(( needed_kb + path_kb ))
+        fi
     done
 
     # VM agent bundles are pulled at runtime and not easily pre-estimated.

@@ -20,11 +20,15 @@ set -euo pipefail
 
 PABS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+JSON_MODE=false
 for arg in "$@"; do
     case "$arg" in
+        --json) JSON_MODE=true ;;
         --help|-h)
-            echo "Usage: $0"
+            echo "Usage: $0 [--json]"
             echo "  Checks PABS health without running a backup."
+            echo "  --json  Emit machine-readable output (one JSON object per check,"
+            echo "          plus a final summary object). Suitable for monitoring."
             echo "  Exit: 0=OK  1=error  2=warning"
             exit 0 ;;
         *) echo "Unknown argument: $arg"; exit 1 ;;
@@ -38,12 +42,30 @@ source "$PABS_DIR/src/lib/host_health.sh"
 PASS="✓"; FAIL="✗"; WARN="⚠"
 OVERALL=0  # 0=OK, 1=error, 2=warning
 
-_ok()   { echo "  $PASS  $*"; }
-_warn() { echo "  $WARN  $*"; [[ $OVERALL -eq 0 ]] && OVERALL=2; }
-_fail() { echo "  $FAIL  $*"; OVERALL=1; }
+# Structured records collected for --json output: "status<TAB>message" per line.
+# The human-readable echo still happens unless --json suppresses it.
+_RECORDS=()
+_record() {
+    local status="$1"; shift
+    _RECORDS+=("${status}"$'\t'"$*")
+}
+# In JSON mode, human prose lines (echoed section headers etc.) go to stderr so
+# stdout stays a clean JSON stream that a collector can parse.
+_say() { if [[ "$JSON_MODE" == "true" ]]; then echo "$@" >&2; else echo "$@"; fi; }
 
-echo ""
-echo "=== PABS Status ==="
+_ok()   { _say "  $PASS  $*"; _record ok   "$*"; }
+_warn() { _say "  $WARN  $*"; _record warn "$*"; [[ $OVERALL -eq 0 ]] && OVERALL=2; }
+_fail() { _say "  $FAIL  $*"; _record fail "$*"; OVERALL=1; }
+
+_say ""
+_say "=== PABS Status ==="
+
+# In JSON mode, send ALL human-readable output (section headers, health-lib
+# echoes) to stderr by pointing stdout at fd 2 for the duration of the checks.
+# fd 3 keeps the original stdout so the final JSON stream can be written there.
+if [[ "$JSON_MODE" == "true" ]]; then
+    exec 3>&1 1>&2
+fi
 
 # ---------------------------------------------------------------------------
 # Root
@@ -191,9 +213,10 @@ else
     if rclone lsd "$RCLONE_REMOTE" --max-depth 1 &>/dev/null; then
         _ok "Remote reachable: $RCLONE_REMOTE"
 
-        # Count existing offsite backups and show storage usage
-        offsite_count=$({ rclone lsf "$RCLONE_REMOTE" --dirs-only 2>/dev/null \
-            | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}/$' \
+        # Count existing offsite archives and show storage usage.
+        # Offsite backups are flat files: <DATE>.tar.zst[.gpg], not directories.
+        offsite_count=$({ rclone lsf "$RCLONE_REMOTE" --files-only 2>/dev/null \
+            | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}\.tar\.zst(\.gpg)?$' \
             || true; } | wc -l)
         offsite_gb=$(rclone size "$RCLONE_REMOTE" --json 2>/dev/null \
             | python3 -c "import json,sys; b=json.load(sys.stdin).get('bytes',0); print(round(b/1073741824,2))" \
@@ -228,12 +251,37 @@ echo "--- Lock ---"
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
-echo ""
-case $OVERALL in
-    0) echo "  Overall: OK" ;;
-    1) echo "  Overall: ERROR" ;;
-    2) echo "  Overall: WARNING" ;;
-esac
-echo ""
+if [[ "$JSON_MODE" == "true" ]]; then
+    # Restore real stdout (fd 3) and emit the JSON stream there.
+    exec 1>&3 3>&-
+    overall_str=OK
+    [[ $OVERALL -eq 1 ]] && overall_str=ERROR
+    [[ $OVERALL -eq 2 ]] && overall_str=WARNING
+    # One JSON object per check, then a summary object — newline-delimited JSON
+    # (jsonl), which Prometheus textfile collectors and log shippers parse easily.
+    # python3 does the escaping so messages with quotes/unicode are safe.
+    ok_n=0; warn_n=0; fail_n=0
+    for (( _i=0; _i<${#_RECORDS[@]}; _i++ )); do
+        st="${_RECORDS[$_i]%%$'\t'*}"
+        case "$st" in ok) : $(( ok_n++ ));; warn) : $(( warn_n++ ));; fail) : $(( fail_n++ ));; esac
+    done
+    {
+        for (( _i=0; _i<${#_RECORDS[@]}; _i++ )); do
+            st="${_RECORDS[$_i]%%$'\t'*}"
+            msg="${_RECORDS[$_i]#*$'\t'}"
+            python3 -c 'import json,sys; print(json.dumps({"type":"check","status":sys.argv[1],"message":sys.argv[2]}))' "$st" "$msg"
+        done
+        python3 -c 'import json,sys; print(json.dumps({"type":"summary","overall":sys.argv[1],"exit_code":int(sys.argv[2]),"ok":int(sys.argv[3]),"warnings":int(sys.argv[4]),"errors":int(sys.argv[5]),"host":sys.argv[6]}))' \
+            "$overall_str" "$OVERALL" "$ok_n" "$warn_n" "$fail_n" "$(hostname)"
+    }
+else
+    echo ""
+    case $OVERALL in
+        0) echo "  Overall: OK" ;;
+        1) echo "  Overall: ERROR" ;;
+        2) echo "  Overall: WARNING" ;;
+    esac
+    echo ""
+fi
 
 exit $OVERALL

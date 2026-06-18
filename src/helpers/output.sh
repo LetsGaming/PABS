@@ -554,15 +554,32 @@ After full rebuild, check:
 - Backup integrity: `cd <this-directory> && sha256sum --check MANIFEST.sha256`
 EOF
 
-    # Offsite recovery instructions — only written if rclone was configured
+    # Offsite recovery instructions — only written if rclone was configured.
+    # PABS uploads each backup as a SINGLE archive file (not a directory tree):
+    #   <DATE>.tar.zst        plain
+    #   <DATE>.tar.zst.gpg    GPG symmetric (AES-256) when a passphrase is set
     if [[ -n "${RCLONE_REMOTE:-}" ]]; then
+        local _enc_method="${RCLONE_ENCRYPTION_METHOD:-symmetric}"
+        local _is_encrypted="false"
+        if [[ "$_enc_method" == "gpg-key" && -n "${RCLONE_ENCRYPTION_RECIPIENT:-}" ]]; then
+            _is_encrypted="true"
+        elif [[ -n "${RCLONE_ENCRYPTION_PASSWORD:-}" ]]; then
+            _is_encrypted="true"; _enc_method="symmetric"
+        fi
+
         local encryption_note=""
-        if [[ -n "${RCLONE_ENCRYPTION_PASSWORD:-}" ]]; then
+        if [[ "$_is_encrypted" == "true" && "$_enc_method" == "symmetric" ]]; then
             encryption_note="
-> **Encrypted remote:** the offsite data was encrypted with rclone crypt.
-> You need your \`RCLONE_ENCRYPTION_PASSWORD\` (and \`RCLONE_ENCRYPTION_SALT\` if set)
-> to access it. Without these, the offsite data cannot be decrypted.
-> Retrieve them from your password manager before proceeding."
+> **Encrypted archive (symmetric):** the offsite file is GPG symmetric-encrypted
+> (AES-256), uploaded as \`<DATE>.tar.zst.gpg\`. You need your
+> \`RCLONE_ENCRYPTION_PASSWORD\` to decrypt it. Retrieve it from your password
+> manager before proceeding."
+        elif [[ "$_is_encrypted" == "true" && "$_enc_method" == "gpg-key" ]]; then
+            encryption_note="
+> **Encrypted archive (public key):** the offsite file is GPG public-key
+> encrypted to \`${RCLONE_ENCRYPTION_RECIPIENT}\`, uploaded as \`<DATE>.tar.zst.gpg\`.
+> You need the corresponding **private key** (which never lived on the backed-up
+> host) imported into GPG on the recovery machine to decrypt it."
         fi
 
         cat >> "$dest" << EOF
@@ -572,54 +589,70 @@ EOF
 ## Recovering from offsite (if USB is lost or unavailable)
 ${encryption_note}
 
-The offsite remote (\`${RCLONE_REMOTE}\`) holds the same backup directories
-as the USB stick, named by date (\`YYYY-MM-DD_HH-MM-SS/\`).
+The offsite remote (\`${RCLONE_REMOTE}\`) holds one compressed archive per
+backup, named by date — \`YYYY-MM-DD_HH-MM-SS.tar.zst\` (or \`.tar.zst.gpg\`
+when encryption is enabled). Each archive unpacks to the same directory layout
+as the USB backup.
 
-### Step 1 — Install rclone and configure the base remote
+### Step 1 — Install tooling and configure the base remote
 \`\`\`bash
-apt install rclone
-rclone config  # re-configure the same remote as on the original host
+apt install rclone zstd $( [[ "$_is_encrypted" == "true" ]] && echo gnupg )
+rclone config  # re-configure the same remote name used on the original host
+\`\`\`
+
+### Step 2 — List and download the archive
+\`\`\`bash
+# List available archives (newest last)
+rclone lsf "${RCLONE_REMOTE}" --files-only | sort
+
+# Download the one you want (adjust the filename)
+mkdir -p /mnt/restore
+rclone copy "${RCLONE_REMOTE}/<YYYY-MM-DD_HH-MM-SS>.tar.zst$( [[ "$_is_encrypted" == "true" ]] && echo .gpg )" /mnt/restore/ --progress
+cd /mnt/restore
 \`\`\`
 EOF
 
-        if [[ -n "${RCLONE_ENCRYPTION_PASSWORD:-}" ]]; then
+        if [[ "$_is_encrypted" == "true" && "$_enc_method" == "gpg-key" ]]; then
             cat >> "$dest" << 'EOF'
 
-### Step 2 — Re-create the encryption wrapper
+### Step 3 — Import the private key, decrypt, and extract
 ```bash
-# Replace <PASSWORD> and <SALT> with your stored credentials.
-# Use the same values as on the original host — wrong credentials = unreadable data.
-rclone config create pabs_crypt_runtime crypt \
-    remote          "<your-base-remote-path>" \
-    filename_encryption standard \
-    directory_name_encryption true \
-    password        "$(rclone obscure '<PASSWORD>')" \
-    password2       "$(rclone obscure '<SALT>')"   # omit if no salt was set
-```
+# Import the private key that matches the recipient used at backup time.
+gpg --import /path/to/your-private-key.asc
 
-Access the remote via `pabs_crypt_runtime:` from here on.
+# Decrypt (GPG selects the matching secret key automatically) and extract.
+gpg -d <YYYY-MM-DD_HH-MM-SS>.tar.zst.gpg | tar --use-compress-program=zstd -xf -
+```
+EOF
+        elif [[ "$_is_encrypted" == "true" ]]; then
+            cat >> "$dest" << 'EOF'
+
+### Step 3 — Decrypt and extract
+```bash
+# You will be prompted for the passphrase (RCLONE_ENCRYPTION_PASSWORD).
+gpg -d <YYYY-MM-DD_HH-MM-SS>.tar.zst.gpg | tar --use-compress-program=zstd -xf -
+```
+EOF
+        else
+            cat >> "$dest" << 'EOF'
+
+### Step 3 — Extract
+```bash
+tar --use-compress-program=zstd -xf <YYYY-MM-DD_HH-MM-SS>.tar.zst
+```
 EOF
         fi
 
-        cat >> "$dest" << EOF
-
-### Step 3 — Download the backup
-\`\`\`bash
-# List available backups
-rclone lsf "${RCLONE_REMOTE}" --dirs-only
-
-# Download the most recent one (adjust date as needed)
-mkdir -p /mnt/restore
-rclone copy "${RCLONE_REMOTE}/<YYYY-MM-DD_HH-MM-SS>" /mnt/restore/ --progress
-\`\`\`
+        cat >> "$dest" << 'EOF'
 
 ### Step 4 — Verify and restore
-\`\`\`bash
-cd /mnt/restore
+```bash
+# The archive extracts into a dated subdirectory — cd into it
+cd <YYYY-MM-DD_HH-MM-SS>
 sha256sum --check MANIFEST.sha256
 chmod +x proxmox-restore.sh
 ./proxmox-restore.sh
-\`\`\`
+```
 EOF
     fi
 
