@@ -183,11 +183,17 @@ VM (vm-agent/agent.sh)
     ↓
 Proxmox host (_run_agent continued)
 │
-├── rsync bundle from VM to local staging
+├── parse agent stdout: file paths + PABS-NOTICE lines (v3.6 — items the
+│   agent reports as NOT backed up; folded into the run summary and alert)
+├── rsync bundle(s) from VM to local staging
 ├── cleanup /tmp/pabs-bundle-* on remote
 ├── check staging free space (abort if below VM_AGENT_STAGE_MIN_FREE_KB)
-├── prune old bundles for this VM (keep VM_AGENT_KEEP_BUNDLES newest)
 └── log bundle size, continue with next agent
+
+(In-staging bundle pruning was removed in v3.6: STAGE_DIR is created fresh
+each run, so there are never cross-run bundles to prune — the old prune could
+only ever delete bundles the agent had just produced. Cross-run retention is
+handled by rotate_old_backups on the USB side.)
 ```
 
 The agent runs entirely inside the VM's `/tmp/` — it never writes to any persistent path on the VM, only reads. If the agent or the rsync fails, the error is logged and the backup continues with the next agent (non-fatal).

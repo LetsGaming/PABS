@@ -12,6 +12,14 @@
 #   resolved path to stdout on success. The caller (sections.sh on the
 #   Proxmox host) captures that line to know exactly what to rsync back.
 #
+#   Since agent v1.1, stdout may additionally carry notice lines of the form
+#     PABS-NOTICE: <message>
+#   for anything the host must surface in its run summary and alert — above
+#   all: data that exists on this VM but was NOT captured (e.g. skipped
+#   Docker volumes). Hosts v3.6+ parse these by prefix; every other stdout
+#   line remains a file path. Hosts older than v3.6 treat every line as a
+#   path, so update the host BEFORE pushing agents (see docs/MIGRATION.md).
+#
 #   Two bundle formats are supported:
 #     .tar.zst  — staging tree compressed with zstd (docker, generic, minecraft)
 #     .tar      — prebuilt file passed through as-is (haos — HA native snapshot)
@@ -41,7 +49,7 @@ set -Eeuo pipefail
 # failures visible in the PABS backup log. The trap fires before exit.
 trap 'echo "[pabs-agent] FATAL: exited with code $? at line $LINENO (${BASH_COMMAND})" >&2' ERR
 
-AGENT_VERSION="1.0"
+AGENT_VERSION="1.1"
 # Config file path resolution:
 #   1. Prefer a config file co-located with the agent itself
 #      (e.g. /config/.pabs-agent/config on HAOS — survives OS updates because
@@ -114,6 +122,21 @@ stage_write() {
     local dest="$STAGE_DIR/$dest_rel"
     mkdir -p "$(dirname "$dest")"
     printf '%s\n' "$content" > "$dest"
+}
+
+# -----------------------------------------------------------------------------
+# HOST NOTICES  (protocol extension, agent v1.1 / PABS host v3.6+)
+#
+# Type handlers call notify_host "<message>" for anything the Proxmox host
+# should surface in its final run summary and alert — above all: data that
+# exists on this VM but was NOT captured. Messages are queued and emitted on
+# stdout after the bundle path lines as:  PABS-NOTICE: <message>
+# -----------------------------------------------------------------------------
+
+_HOST_NOTICES=()
+notify_host() {
+    local msg="$*"
+    _HOST_NOTICES+=("${msg//$'\n'/ }")   # the protocol is line-based — flatten newlines
 }
 
 # -----------------------------------------------------------------------------
@@ -258,11 +281,21 @@ EOF
 # PORTAINER_URL="http://localhost:9000"
 # PORTAINER_TOKEN="ptr_..."
 
-# Named volumes to always include regardless of size
+# --- Volume capture (default: ALL named volumes are backed up) ---
+# Named volumes to skip (explicit opt-out; every skip is reported loudly)
+# DOCKER_EXCLUDE_VOLUMES="jellyfin_cache,plex_transcode"
+
+# Named volumes to ALWAYS include (beats the exclude list and the size cap)
 # DOCKER_INCLUDE_VOLUMES="portainer_data,traefik_certs"
 
-# Auto-include volumes smaller than this many MB (0 = disable auto-include)
-# DOCKER_VOLUME_AUTO_THRESHOLD_MB=5
+# Skip volumes larger than this many MB (0 = no cap, the default)
+# DOCKER_VOLUME_MAX_SIZE_MB=0
+
+# Stop the containers using a volume while it is copied, restart them after.
+# Guarantees consistent database copies at the cost of brief downtime.
+# Off by default: hot copies are taken instead and marked in restore-notes.txt.
+# DOCKER_QUIESCE_STACKS="false"
+# DOCKER_QUIESCE_STOP_TIMEOUT=30
 
 # Set to "true" to skip all volume backups
 # DOCKER_SKIP_VOLUMES="false"
@@ -437,6 +470,13 @@ Kernel:   $(uname -r)
     # The prebuilt file is always first; the meta sidecar is second (if present).
     echo "$final_path"
     if [[ -n "${meta_path:-}" ]]; then echo "$meta_path"; fi
+
+    # Notices last. The host parses by prefix so order is irrelevant, but
+    # keeping paths first preserves readability of raw agent output.
+    local _n
+    for _n in ${_HOST_NOTICES[@]+"${_HOST_NOTICES[@]}"}; do
+        echo "PABS-NOTICE: $_n"
+    done
 }
 
 main "$@"

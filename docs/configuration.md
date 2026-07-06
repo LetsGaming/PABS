@@ -157,16 +157,9 @@ VM_SSH_KEY_docker_vm="/root/.ssh/id_ed25519_dockervm"
 VM_SSH_KEY_pihole_lxc="/root/.ssh/id_ed25519_pihole"
 ```
 
-### `VM_AGENT_KEEP_BUNDLES`
+### `VM_AGENT_KEEP_BUNDLES` *(removed in v3.6)*
 
-**Type:** positive integer | **Default:** `2`
-
-How many bundles to keep per VM on USB.
-
-```bash
-VM_AGENT_KEEP_BUNDLES=2
-VM_AGENT_KEEP_BUNDLES=1   # recommended for HAOS (snapshots can be 500 MB+)
-```
+This option no longer exists. Each dated backup is a full, independent snapshot containing exactly one bundle per VM, so there was never anything to prune inside a run — the old prune could only ever delete bundles an agent had just produced. Cross-run retention is handled by `KEEP_BACKUPS`. A leftover `VM_AGENT_KEEP_BUNDLES` value in an existing `config.sh` is harmless and simply ignored.
 
 ### `VM_AGENT_MAX_PARALLEL`
 
@@ -279,6 +272,17 @@ Extra flags passed to every `rclone sync` call. Word-split by the shell before u
 RCLONE_EXTRA_OPTS="--bwlimit 5M"               # cap upload at 5 MB/s
 RCLONE_EXTRA_OPTS="--bwlimit 2M --transfers 1"
 RCLONE_EXTRA_OPTS=""                            # no limits
+```
+
+### `OFFSITE_TMP_DIR`
+
+**Type:** path | **Default:** empty (uses `LOCAL_STAGE_BASE`)
+
+Where the offsite archive is assembled before upload. Deliberately **not** `/tmp`: on many Proxmox installs `/tmp` is tmpfs (RAM-backed), and an agent-heavy archive could consume gigabytes of RAM or fail outright. Set this only if you want the scratch space on a different disk-backed path than the staging area.
+
+```bash
+OFFSITE_TMP_DIR=""                          # default: build under LOCAL_STAGE_BASE
+OFFSITE_TMP_DIR="/mnt/pve/mystore/scratch"  # dedicated scratch volume
 ```
 
 ### `RCLONE_KEEP_MIN`

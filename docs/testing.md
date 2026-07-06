@@ -32,6 +32,7 @@ bats tests/pabs.bats --tap
 bats tests/pabs.bats --filter rotate      # rotation tests only
 bats tests/pabs.bats --filter manifest    # manifest tests only
 bats tests/pabs.bats --filter log         # log counter tests only
+bats tests/pabs.bats --filter docker      # docker volume policy tests only
 ```
 
 ---
@@ -62,6 +63,32 @@ Covers `generate_and_verify_manifest` in `helpers/manifest.sh`:
 | Creates correct checksums | `MANIFEST.sha256` is written and passes `sha256sum --check` |
 | Does not include itself | `MANIFEST.sha256` is excluded from its own checksum list |
 | Handles filenames with spaces | `find -print0 \| xargs -0` pipeline handles spaces without splitting |
+
+### Manifest hardening (v3.6) — 4 tests
+
+Covers the audit fixes in `src/helpers/manifest.sh`:
+
+| Test | What it checks |
+| :--- | :------------- |
+| Empty staging aborts | An empty `STAGE_DIR` triggers the "all sections failed" `die` instead of fabricating a 1-line manifest for stdin (`xargs -r` guard) |
+| Dirs-only staging aborts | Same guard fires when staging contains directories but zero files |
+| Generated docs become verifiable | `extend_manifest_on_usb` appends `proxmox-restore.sh` / `README.txt` / `DISASTER-RECOVERY.md` so `--verify` detects their corruption |
+| Missing doc is non-fatal | A doc that failed to generate warns without failing the backup |
+
+### Docker volume capture policy (v3.6) — 10 tests
+
+Covers `_volume_decision`, `_backup_named_volume`, and `_backup_volumes` in `src/vm-agent/types/docker.sh`, with the `docker` CLI stubbed as a shell function so results are deterministic on any machine:
+
+| Test | What it checks |
+| :--- | :------------- |
+| Opt-out default | Every named volume is included unless explicitly excluded |
+| Exclude list | `DOCKER_EXCLUDE_VOLUMES` skips exactly the listed volumes — exact match, so excluding `db` does not also exclude `my-db` |
+| Include precedence | `DOCKER_INCLUDE_VOLUMES` beats both the exclude list and the size cap |
+| Size cap | `DOCKER_VOLUME_MAX_SIZE_MB` skips oversized volumes with an actionable reason |
+| Unknown size → include | A volume whose size cannot be probed is always captured, even with a cap set (the old code silently skipped it) |
+| Skips are recorded | Cap skips land in `_skipped_volumes` for restore-notes and the host notice |
+| Legacy mapping | `DOCKER_VOLUME_AUTO_THRESHOLD_MB` still works, mapped onto the new cap with a deprecation warning |
+| Disabled volumes notify | `DOCKER_SKIP_VOLUMES=true` pushes a notice to the host |
 
 ### Log counter safety — 3 tests
 

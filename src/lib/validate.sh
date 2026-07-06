@@ -27,7 +27,9 @@ validate_config() {
     _is_pint "${KEEP_BACKUPS:-}" \
         || { log_err "KEEP_BACKUPS must be an integer ≥ 1 (got '${KEEP_BACKUPS:-}')"; (( errors++ )); }
 
-    for var in VM_AGENT_KEEP_BUNDLES VM_AGENT_MAX_PARALLEL VM_AGENT_TIMEOUT \
+    # (VM_AGENT_KEEP_BUNDLES was removed in 3.6 — a leftover value in an old
+    # config.sh is harmless and simply ignored.)
+    for var in VM_AGENT_MAX_PARALLEL VM_AGENT_TIMEOUT \
                VM_AGENT_STAGE_MIN_FREE_KB LOCAL_STAGE_WARN_GB; do
         local val="${!var:-}"
         [[ -z "$val" ]] && continue   # optional — defaults applied elsewhere

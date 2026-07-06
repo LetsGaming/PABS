@@ -3,7 +3,7 @@
 # PABS Configuration Template
 # Copy to config.sh before editing. config.sh is .gitignored — git pulls
 # never touch your settings.
-# Proxmox Automated Backup System — v3.5
+# Proxmox Automated Backup System — v3.6
 #
 # This is the ONLY file you need to edit for a standard setup.
 # All other files are library code that should not require changes.
@@ -98,10 +98,9 @@ VM_SSH_KEY=""
 # Example for label "docker-vm":
 #   VM_SSH_KEY_docker_vm="/root/.ssh/id_ed25519_dockervm"
 
-# How many agent bundles to keep per VM on the USB before rotating old ones.
-# Set to 1 to keep only the latest (saves space — especially for HAOS snapshots
-# which can be 500MB+).
-VM_AGENT_KEEP_BUNDLES=2
+# (VM_AGENT_KEEP_BUNDLES was removed in v3.6: each dated backup is a full,
+#  independent snapshot containing exactly one bundle per VM, so there was
+#  never anything to prune inside a run. Cross-run retention is KEEP_BACKUPS.)
 
 # Maximum number of VM agents to run in parallel (default: 1 = sequential).
 # Increase if you have many agents and want to cut total backup time.
@@ -169,6 +168,13 @@ RCLONE_REMOTE=""
 # Extra rclone flags — bandwidth limit, parallel transfers, etc.
 # "--bwlimit 5M" caps upload at 5 MB/s to avoid saturating the uplink.
 RCLONE_EXTRA_OPTS="--bwlimit 5M"
+
+# Where the offsite archive is assembled before upload.
+# Default: LOCAL_STAGE_BASE (leave empty). Deliberately NOT /tmp — on many
+# Proxmox installs /tmp is tmpfs (RAM-backed), and an agent-heavy archive
+# could consume gigabytes of RAM. Point this at any disk-backed path with
+# room for one compressed backup if you want it elsewhere.
+OFFSITE_TMP_DIR=""
 
 # -----------------------------------------------------------------------------
 # OFFSITE RETENTION

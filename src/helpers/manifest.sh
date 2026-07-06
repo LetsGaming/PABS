@@ -16,9 +16,15 @@ generate_and_verify_manifest() {
     local manifest="$STAGE_DIR/MANIFEST.sha256"
     (
         cd "$STAGE_DIR" || die "Cannot cd into STAGE_DIR: $STAGE_DIR"
+        # xargs -r (--no-run-if-empty, GNU) is load-bearing: without it, an
+        # EMPTY staging dir makes xargs run `sha256sum` once with no args,
+        # which hashes stdin and emits one line for filename '-'. That single
+        # line made file_count=1 and defeated the "all sections failed" guard
+        # below (audit BUG-05). With -r, empty find output → empty manifest
+        # → the guard fires as designed.
         find . -type f ! -name "MANIFEST.sha256" -print0 \
             | sort -z \
-            | xargs -0 sha256sum \
+            | xargs -0 -r sha256sum \
             > MANIFEST.sha256
     )
 
@@ -35,6 +41,40 @@ generate_and_verify_manifest() {
         # _on_exit (core.sh) will clean up STAGE_DIR and fire the alert
         die "Manifest verification FAILED on local stage. Aborting before USB write."
     fi
+}
+
+# -----------------------------------------------------------------------------
+# extend_manifest_on_usb FILE [FILE...]
+# Appends checksums for files generated AFTER the staging manifest was built
+# (proxmox-restore.sh, README.txt, DISASTER-RECOVERY.md — they are written
+# directly into FINAL_DIR post-commit). Without this they were the only files
+# in a backup that --verify could not cover, so their silent corruption went
+# undetectable (audit BUG-08). Paths are relative to FINAL_DIR and recorded
+# in the same "./name" form the find-based generator uses.
+# -----------------------------------------------------------------------------
+extend_manifest_on_usb() {
+    local manifest="$FINAL_DIR/MANIFEST.sha256"
+    if [[ ! -f "$manifest" ]]; then
+        log_warn "Cannot extend manifest — $manifest not found"
+        return
+    fi
+
+    local f added=0
+    for f in "$@"; do
+        if [[ ! -f "$FINAL_DIR/$f" ]]; then
+            log_warn "  Manifest extend: $f not found in $FINAL_DIR — skipping"
+            continue
+        fi
+        if ( cd "$FINAL_DIR" && sha256sum "./$f" >> MANIFEST.sha256 ); then
+            : $(( added++ ))
+        else
+            log_warn "  Manifest extend: checksum of $f failed"
+        fi
+    done
+    if [[ $added -gt 0 ]]; then
+        log "  ✓ Manifest extended with $added generated doc(s) — now covered by --verify"
+    fi
+    return 0
 }
 
 verify_manifest_on_usb() {

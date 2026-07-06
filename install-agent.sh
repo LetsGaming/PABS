@@ -12,6 +12,13 @@ SSH_KEY=""
 SSH_PORT=""
 PABS_KNOWN_HOSTS="/root/.ssh/pabs_known_hosts"
 
+# StrictHostKeyChecking=accept-new is trust-on-first-use (TOFU): the first
+# connection to each host is accepted and its key pinned into the dedicated
+# PABS_KNOWN_HOSTS file; any later key change is refused. The one-time window
+# on the very first connect is an accepted tradeoff for a deploy tool on a
+# trusted LAN (audit SEC-03). To close it entirely, pre-pin the key before
+# running this script:
+#   ssh-keyscan -H <vm-ip> >> /root/.ssh/pabs_known_hosts
 SSH_OPTS=(
     -o BatchMode=yes
     -o ConnectTimeout=10

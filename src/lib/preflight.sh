@@ -121,13 +121,22 @@ check_usb_space() {
     if [[ $available_kb -lt $needed_with_margin ]]; then
         # Try to recover space by purging the oldest completed backup —
         # but never if it's the last one (always keep at least one restore point).
+        #
+        # DELIBERATE TRADEOFF (audit BUG-07): this purge runs BEFORE the new
+        # backup is proven, so the number of restore points is temporarily
+        # reduced by one until the new run commits and verifies. It cannot be
+        # deferred to post-commit — the space must exist before the USB
+        # transfer can start. Two safety floors bound the risk:
+        #   1. the last remaining backup is never purged (die below), and
+        #   2. regular rotation (rotate_old_backups) still runs post-commit only.
+        # If this alert fires regularly, lower KEEP_BACKUPS or use a larger drive.
         mapfile -t existing < <(
             find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d ! -name ".*" ! -name "*.tmp" | sort
         )
 
         if [[ ${#existing[@]} -gt 1 ]]; then
             log_warn "USB low on space. Auto-purging oldest backup: ${existing[0]}"
-            dispatch_alert "Low USB space — purging oldest backup (${existing[0]##*/}) to make room."
+            dispatch_alert "Low USB space — purging oldest backup (${existing[0]##*/}) to make room. Restore points are reduced by one until this backup commits. If this repeats, lower KEEP_BACKUPS or use a larger drive."
             rm -rf "${existing[0]}"
             sync
 

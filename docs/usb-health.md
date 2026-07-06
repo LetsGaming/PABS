@@ -2,6 +2,8 @@
 
 `pabs-status.sh` runs a passive drive health assessment automatically whenever the USB stick is mounted. It does not write to the drive, does not scan all data, and completes in seconds.
 
+Since v3.6, `backup.sh` additionally runs a quick probe of the always-reliable signals (read-only remount, kernel I/O errors, ext superblock error counter) **before every backup**, so a failing drive is flagged on the path that runs on a schedule — not only when someone remembers to run `pabs-status.sh`. Probe failures raise a warning and a Discord/mail alert; the backup still proceeds, because a failing drive is a reason to attempt the backup *more* urgently, not less. SMART is deliberately left out of the pre-backup probe (slow and unreliable through many USB bridges) — `pabs-status.sh` remains the full report.
+
 ```bash
 sudo bash /opt/pabs/pabs-status.sh
 ```

@@ -183,9 +183,20 @@ offsite_sync() {
     log "  Remote   : $RCLONE_REMOTE"
     log "  Encrypted: $encrypted${encrypted:+ ($enc_method)}"
 
-    # --- Build archive in /tmp (fast local storage, not USB) ----------------
+    # --- Build archive on the staging filesystem (audit SEC-02) -------------
+    # NOT /tmp: on many Proxmox installs /tmp is tmpfs (RAM-backed), so an
+    # agent-heavy archive could eat gigabytes of RAM or fail outright.
+    # LOCAL_STAGE_BASE is already sized to hold a full backup; OFFSITE_TMP_DIR
+    # overrides it for setups that want a different scratch disk.
+    local offsite_tmp_root="${OFFSITE_TMP_DIR:-$LOCAL_STAGE_BASE}"
+    mkdir -p "$offsite_tmp_root"
+
+    # Clear leftovers from a previously interrupted run. Safe: the lock in
+    # core.sh guarantees no concurrent PABS run owns these files.
+    find "$offsite_tmp_root" -maxdepth 1 -type f -name 'pabs-offsite-*.tar.zst*' -delete 2>/dev/null || true
+
     local archive_name="${DATE}.tar.zst"
-    local archive_tmp="/tmp/pabs-offsite-${DATE}.tar.zst"
+    local archive_tmp="${offsite_tmp_root}/pabs-offsite-${DATE}.tar.zst"
     local upload_file="$archive_tmp"
     local upload_name="$archive_name"
 

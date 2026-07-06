@@ -92,7 +92,7 @@ All data stages on the host SSD first, is SHA256-verified, then transferred to U
 
 | Type | What is collected |
 | :--- | :---------------- |
-| `docker` | All `docker-compose.yml` + `.env` files, named volumes (under threshold), daemon config |
+| `docker` | All `docker-compose.yml` + `.env` files, **all named volumes** (opt-out via exclude list / size cap), daemon config |
 | `haos` | Full native HA snapshot via `ha` CLI — one-click restore in the HA UI |
 | `minecraft` | Weekly `.tar.zst` archives, `server.properties`, mods, plugins |
 | `generic` | `/etc/` (full), cron jobs, `/usr/local/bin/`, `/root/scripts/`, package list |

@@ -293,3 +293,224 @@ _source_validate() {
     [ "$status" -ne 0 ]
     [[ "$output" == *"RCLONE_ENCRYPTION_RECIPIENT"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# Manifest — empty-staging total-failure guard (audit BUG-05, added in 3.6)
+# ---------------------------------------------------------------------------
+
+@test "generate_and_verify_manifest: empty staging aborts instead of fabricating a manifest" {
+    _source_manifest
+    die() { echo "DIE: $*"; exit 1; }
+    STAGE_DIR="$BATS_TEST_TMPDIR/stage-empty"
+    mkdir -p "$STAGE_DIR"
+
+    # Before the xargs -r fix, an empty stage produced a 1-line manifest for
+    # stdin ('-'), defeating the "all sections failed" guard.
+    run generate_and_verify_manifest
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"DIE:"* ]]
+    [[ "$output" == *"empty"* ]]
+}
+
+@test "generate_and_verify_manifest: dirs-only staging also aborts" {
+    _source_manifest
+    die() { echo "DIE: $*"; exit 1; }
+    STAGE_DIR="$BATS_TEST_TMPDIR/stage-dirs"
+    mkdir -p "$STAGE_DIR/etc/pve" "$STAGE_DIR/vm-agents"
+
+    run generate_and_verify_manifest
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"DIE:"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# Manifest — post-generation extension for generated docs (audit BUG-08)
+# ---------------------------------------------------------------------------
+
+@test "extend_manifest_on_usb: generated docs become covered by --verify" {
+    _source_manifest
+    FINAL_DIR="$BATS_TEST_TMPDIR/usb/2025-01-01_03-00-00"
+    mkdir -p "$FINAL_DIR"
+    echo "payload" > "$FINAL_DIR/data.txt"
+    ( cd "$FINAL_DIR" && sha256sum ./data.txt > MANIFEST.sha256 )
+
+    # Docs are written after the manifest, exactly like backup.sh does it
+    echo "#!/bin/bash" > "$FINAL_DIR/proxmox-restore.sh"
+    echo "readme"      > "$FINAL_DIR/README.txt"
+    echo "# DR"        > "$FINAL_DIR/DISASTER-RECOVERY.md"
+
+    extend_manifest_on_usb "proxmox-restore.sh" "README.txt" "DISASTER-RECOVERY.md"
+
+    grep -q "proxmox-restore.sh"   "$FINAL_DIR/MANIFEST.sha256"
+    grep -q "README.txt"           "$FINAL_DIR/MANIFEST.sha256"
+    grep -q "DISASTER-RECOVERY.md" "$FINAL_DIR/MANIFEST.sha256"
+    ( cd "$FINAL_DIR" && sha256sum --quiet --check MANIFEST.sha256 )
+
+    # ...and corruption of a generated doc is now detectable
+    echo "tampered" > "$FINAL_DIR/README.txt"
+    run bash -c "cd '$FINAL_DIR' && sha256sum --quiet --check MANIFEST.sha256"
+    [ "$status" -ne 0 ]
+}
+
+@test "extend_manifest_on_usb: missing doc warns but does not fail the run" {
+    _source_manifest
+    FINAL_DIR="$BATS_TEST_TMPDIR/usb/2025-01-02_03-00-00"
+    mkdir -p "$FINAL_DIR"
+    echo "payload" > "$FINAL_DIR/data.txt"
+    ( cd "$FINAL_DIR" && sha256sum ./data.txt > MANIFEST.sha256 )
+
+    run extend_manifest_on_usb "does-not-exist.txt"
+    [ "$status" -eq 0 ]
+    ( cd "$FINAL_DIR" && sha256sum --quiet --check MANIFEST.sha256 )
+}
+
+# ---------------------------------------------------------------------------
+# Docker agent — volume capture policy (audit BUG-01/BUG-03, agent v1.1)
+# ---------------------------------------------------------------------------
+
+# Source the docker type handler with a stubbed agent environment.
+# `docker` is stubbed as a failing shell function so tests are deterministic
+# regardless of whether a Docker daemon exists on the test machine.
+_source_docker() {
+    STAGE_DIR="$BATS_TEST_TMPDIR/agent-stage"
+    mkdir -p "$STAGE_DIR"
+    WARNINGS=0; ERRORS=0
+    STAGED=(); NOTICES=()
+    log()      { :; }
+    log_warn() { : $(( WARNINGS++ )); }
+    log_err()  { : $(( ERRORS++ )); }
+    notify_host() { NOTICES+=("$*"); }
+    stage_path()  { STAGED+=("$1"); }
+    stage_cmd()   { :; }
+    stage_write() { :; }
+    docker()      { return 1; }
+    # shellcheck source=../src/vm-agent/types/docker.sh
+    source "$PABS_DIR/src/vm-agent/types/docker.sh"
+}
+
+@test "docker _volume_decision: default is include (opt-out model)" {
+    _source_docker
+    run _volume_decision "postgres_data" "4096"
+    [[ "$output" == include* ]]
+}
+
+@test "docker _volume_decision: DOCKER_EXCLUDE_VOLUMES skips exactly that volume" {
+    _source_docker
+    DOCKER_EXCLUDE_VOLUMES="jellyfin_cache, plex_transcode"
+
+    run _volume_decision "jellyfin_cache" "900"
+    [[ "$output" == skip* ]]
+    run _volume_decision "plex_transcode" "900"
+    [[ "$output" == skip* ]]
+    run _volume_decision "postgres_data" "900"
+    [[ "$output" == include* ]]
+}
+
+@test "docker _volume_decision: exclude match is exact, not substring/word-boundary" {
+    _source_docker
+    # grep -qw would have treated '-' as a word boundary and skipped 'my-db' too
+    DOCKER_EXCLUDE_VOLUMES="db"
+    run _volume_decision "my-db" "10"
+    [[ "$output" == include* ]]
+    run _volume_decision "db" "10"
+    [[ "$output" == skip* ]]
+}
+
+@test "docker _volume_decision: DOCKER_INCLUDE_VOLUMES beats exclude list and cap" {
+    _source_docker
+    DOCKER_INCLUDE_VOLUMES="postgres_data"
+    DOCKER_EXCLUDE_VOLUMES="postgres_data"
+    DOCKER_VOLUME_MAX_SIZE_MB=1
+
+    run _volume_decision "postgres_data" "50000"
+    [[ "$output" == include* ]]
+}
+
+@test "docker _volume_decision: size cap skips oversized volumes loudly-reasoned" {
+    _source_docker
+    DOCKER_VOLUME_MAX_SIZE_MB=100
+
+    run _volume_decision "big_volume" "500"
+    [[ "$output" == skip* ]]
+    [[ "$output" == *"DOCKER_VOLUME_MAX_SIZE_MB"* ]]
+
+    run _volume_decision "small_volume" "50"
+    [[ "$output" == include* ]]
+}
+
+@test "docker _volume_decision: unknown size is INCLUDED even with a cap set (BUG-03)" {
+    _source_docker
+    DOCKER_VOLUME_MAX_SIZE_MB=100
+
+    # Old behavior defaulted unknown size to 999 → silently skipped.
+    run _volume_decision "unmeasurable" "unknown"
+    [[ "$output" == include* ]]
+}
+
+@test "docker _backup_named_volume: size-probe failure still stages the volume (BUG-03)" {
+    _source_docker
+    DOCKER_VOLUME_MAX_SIZE_MB=1   # cap active — unknown size must bypass it
+
+    local fake_mount="$BATS_TEST_TMPDIR/vol-mnt"
+    mkdir -p "$fake_mount"
+    echo "data" > "$fake_mount/db.sqlite"
+
+    # docker inspect resolves; du fails → size unknown
+    docker() {
+        case "$1" in
+            volume) [[ "$2" == "inspect" ]] && { echo "$fake_mount"; return 0; }; return 1 ;;
+            ps)     return 0 ;;   # no writers
+            *)      return 1 ;;
+        esac
+    }
+    du() { return 1; }
+
+    _backup_named_volume "unmeasurable_vol" "auto"
+
+    [ "${#STAGED[@]}" -eq 1 ]
+    [ "${STAGED[0]}" = "$fake_mount" ]
+    [ "${#_skipped_volumes[@]}" -eq 0 ]
+}
+
+@test "docker _backup_named_volume: cap skip is recorded for notes and host notice" {
+    _source_docker
+    DOCKER_VOLUME_MAX_SIZE_MB=1
+
+    local fake_mount="$BATS_TEST_TMPDIR/vol-big"
+    mkdir -p "$fake_mount"
+    dd if=/dev/zero of="$fake_mount/blob" bs=1M count=3 status=none
+
+    docker() {
+        case "$1" in
+            volume) [[ "$2" == "inspect" ]] && { echo "$fake_mount"; return 0; }; return 1 ;;
+            *)      return 1 ;;
+        esac
+    }
+
+    _backup_named_volume "big_vol" "auto"
+
+    [ "${#STAGED[@]}" -eq 0 ]
+    [ "${#_skipped_volumes[@]}" -eq 1 ]
+    [[ "${_skipped_volumes[0]}" == "big_vol"* ]]
+}
+
+@test "docker _backup_volumes: legacy DOCKER_VOLUME_AUTO_THRESHOLD_MB maps to the new size cap" {
+    _source_docker
+    DOCKER_VOLUME_AUTO_THRESHOLD_MB=25
+    DOCKER_VOLUME_MAX_SIZE_MB=0
+
+    _backup_volumes   # docker stub fails → volume sweep is empty, mapping still runs
+
+    [ "$DOCKER_VOLUME_MAX_SIZE_MB" = "25" ]
+    [ "$WARNINGS" -ge 1 ]   # deprecation warning fired
+}
+
+@test "docker _backup_volumes: DOCKER_SKIP_VOLUMES=true notifies the host" {
+    _source_docker
+    DOCKER_SKIP_VOLUMES="true"
+
+    _backup_volumes
+
+    [ "${#NOTICES[@]}" -eq 1 ]
+    [[ "${NOTICES[0]}" == *"disabled by config"* ]]
+}

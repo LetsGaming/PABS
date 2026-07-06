@@ -260,6 +260,13 @@ section_vm_agents() {
     local max_parallel="${VM_AGENT_MAX_PARALLEL:-1}"
     local pids=()
 
+    # Agent notices ("X was NOT backed up") are aggregated through a temp
+    # file because parallel workers run in subshells. The file lives OUTSIDE
+    # STAGE_DIR so it can never land in the backup or its manifest.
+    # backup.sh folds RUN_NOTICES into the final summary and the alert.
+    AGENT_NOTICES_FILE="$LOCAL_STAGE_BASE/.pabs-agent-notices-$DATE"
+    : > "$AGENT_NOTICES_FILE"
+
     _run_agent() {
         local entry="$1"
         local label vm_host ssh_user agent_path
@@ -314,10 +321,24 @@ section_vm_agents() {
             return 1
         }
 
-        # Parse the output — each non-empty line is a file to pull
+        # Parse the output. Since agent v1.1 stdout carries two line types:
+        #   PABS-NOTICE: <msg>  — something the run summary/alert must surface
+        #                         (above all: data that was NOT backed up)
+        #   anything else       — a file path to pull
         local -a remote_files=()
         while IFS= read -r line; do
-            [[ -n "$line" ]] && remote_files+=("$line")
+            [[ -z "$line" ]] && continue
+            if [[ "$line" == "PABS-NOTICE: "* ]]; then
+                local notice="${line#PABS-NOTICE: }"
+                log_warn "  [$label] $notice"
+                # Collected in a file, not a shell array: parallel workers run
+                # in subshells, and array writes would never reach the parent.
+                if [[ -n "${AGENT_NOTICES_FILE:-}" ]]; then
+                    printf '[%s] %s\n' "$label" "$notice" >> "$AGENT_NOTICES_FILE"
+                fi
+            else
+                remote_files+=("$line")
+            fi
         done <<< "$agent_stdout"
 
         if [[ ${#remote_files[@]} -eq 0 ]]; then
@@ -356,25 +377,12 @@ section_vm_agents() {
             return 3
         fi
 
-        # Prune old bundles for this VM.
-        # Match any file format the agent may have produced (.tar.zst or .tar)
-        # but exclude .meta.tar.zst sidecars — they're small and pruned with
-        # their primary file by name prefix matching below.
-        local keep="${VM_AGENT_KEEP_BUNDLES:-2}"
-        local old_bundles=()
-        mapfile -t old_bundles < <(
-            find "$local_dest" -maxdepth 1 -type f \( -name "*.tar.zst" -o -name "*.tar" \) \
-                ! -name "*.meta.tar.zst" \
-                -printf '%T@ %p\n' | sort -n | awk '{print $2}' | head -n -"$keep"
-        )
-        for b in "${old_bundles[@]}"; do
-            # Also remove the companion .meta.tar.zst sidecar if present
-            local meta_b="${b%.tar}.meta.tar.zst"
-            [[ -f "$meta_b" ]] && rm -f "$meta_b" \
-                && log "    [$label] pruned sidecar: $(basename "$meta_b")"
-            rm -f "$b"
-            log "    [$label] pruned old bundle: $(basename "$b")"
-        done
+        # NOTE: no in-staging bundle pruning here (removed in 3.6, audit
+        # BUG-06). STAGE_DIR is created fresh every run, so there are never
+        # cross-run "old" bundles to prune — the old prune block could only
+        # ever delete bundles the agent had JUST produced in this run.
+        # Cross-run retention is handled by rotate_old_backups on the USB
+        # side: each dated backup is a full, independent snapshot.
 
         return 0
     }
@@ -417,6 +425,12 @@ section_vm_agents() {
     for pid in "${pids[@]}"; do
         _wait_one "$pid" || abort=true
     done
+
+    if [[ -s "$AGENT_NOTICES_FILE" ]]; then
+        mapfile -t RUN_NOTICES < "$AGENT_NOTICES_FILE"
+        log_warn "${#RUN_NOTICES[@]} agent notice(s) collected — items NOT backed up or needing attention (repeated in the final summary)"
+    fi
+    rm -f "$AGENT_NOTICES_FILE"
 
     log "  VM agents: $total_ok OK, $total_fail failed, $total_skip skipped"
     if [[ $total_fail -gt 0 ]]; then log_err "$total_fail VM agent(s) failed"; fi

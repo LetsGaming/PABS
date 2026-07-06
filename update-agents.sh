@@ -180,8 +180,9 @@ _update_agent() {
 
     # Check if remote has rsync; fall back to scp if not
     local remote_has_rsync=false
-    ssh "${ssh_opts[@]}" "$ssh_user@$vm_host" "command -v rsync >/dev/null 2>&1" \
-        && remote_has_rsync=true || true
+    if ssh "${ssh_opts[@]}" "$ssh_user@$vm_host" "command -v rsync >/dev/null 2>&1"; then
+        remote_has_rsync=true
+    fi
 
     local copy_rc=0
 

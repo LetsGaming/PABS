@@ -10,7 +10,7 @@ No disk images are involved. Each bundle includes a `restore-notes.txt` with typ
 
 | Type | Detection | What is backed up |
 | :--- | :-------- | :---------------- |
-| `docker` | `docker` CLI present | All compose files + `.env` files, Docker daemon config, named volumes (under threshold), package list |
+| `docker` | `docker` CLI present | All compose files + `.env` files, Docker daemon config, **all named volumes** (opt-out via exclude list / size cap), package list |
 | `haos` | `ha` CLI present + `/config/configuration.yaml` exists | Full native HA snapshot (`.tar`) via `ha` CLI — one-click restore in the HA UI |
 | `minecraft` | `minecraft` system user, or `MINECRAFT_BASE` directory present | Weekly `.tar.zst` archives from [minecraft-server-setup](https://github.com/LetsGaming/minecraft-server-setup), server config files, mods/plugins |
 | `generic` | everything else | `/etc/` (full), cron jobs, `/usr/local/bin/`, `/root/scripts/`, package list |
@@ -135,9 +135,13 @@ To update a setting after initial installation, re-run `install-agent.sh` with t
 | `DOCKGE_DATA_DIR` | `/opt/dockge` | Dockge data/config directory |
 | `PORTAINER_URL` | `http://localhost:9000` | Portainer API URL |
 | `PORTAINER_TOKEN` | `""` | Portainer API token for stack export (`ptr_...`) |
-| `DOCKER_INCLUDE_VOLUMES` | `""` | Comma-separated named volumes to always include |
-| `DOCKER_VOLUME_AUTO_THRESHOLD_MB` | `5` | Auto-include volumes smaller than this many MB |
+| `DOCKER_INCLUDE_VOLUMES` | `""` | Comma-separated named volumes to ALWAYS include (beats exclude list and size cap) |
+| `DOCKER_EXCLUDE_VOLUMES` | `""` | Comma-separated named volumes to skip (explicit opt-out; every skip is reported loudly) |
+| `DOCKER_VOLUME_MAX_SIZE_MB` | `0` | Skip volumes larger than this many MB (`0` = no cap). Skips are reported loudly |
+| `DOCKER_QUIESCE_STACKS` | `false` | Stop containers using a volume during its copy, restart after — guarantees consistent DB copies at the cost of brief downtime |
+| `DOCKER_QUIESCE_STOP_TIMEOUT` | `30` | Seconds `docker stop` waits before SIGKILL when quiescing |
 | `DOCKER_SKIP_VOLUMES` | `false` | Set to `true` to skip all volume backups |
+| `DOCKER_VOLUME_AUTO_THRESHOLD_MB` | *(deprecated)* | Pre-v3.6 opt-in threshold. If still set it is honored as `DOCKER_VOLUME_MAX_SIZE_MB` with a deprecation warning |
 | `EXTRA_PATHS` | `""` | Space-separated extra paths to always include (universal — works across all agent types) |
 
 **Examples:**
@@ -158,7 +162,29 @@ To update a setting after initial installation, re-run `install-agent.sh` with t
 # Force-include specific named volumes regardless of size
 ./install-agent.sh root@192.168.1.10 \
     --set DOCKER_INCLUDE_VOLUMES=portainer_data,traefik_certs,vaultwarden_data
+
+# Exclude rebuildable cache volumes, cap anything over 10 GB
+./install-agent.sh root@192.168.1.10 \
+    --set DOCKER_EXCLUDE_VOLUMES=jellyfin_cache,plex_transcode \
+    --set DOCKER_VOLUME_MAX_SIZE_MB=10240
+
+# Consistent database copies: stop containers during the copy, restart after
+./install-agent.sh root@192.168.1.10 \
+    --set DOCKER_QUIESCE_STACKS=true
 ```
+
+#### Volume capture policy (changed in v3.6)
+
+**Every named volume is backed up by default.** Earlier versions auto-included only volumes under `DOCKER_VOLUME_AUTO_THRESHOLD_MB` (default 5 MB), which silently excluded exactly the data the tool exists to protect — database and app-data volumes — while the run still reported SUCCESS. The model is now opt-out:
+
+1. `DOCKER_INCLUDE_VOLUMES` — always captured, beats everything below.
+2. `DOCKER_EXCLUDE_VOLUMES` — explicit opt-out for rebuildable data (caches, transcodes).
+3. `DOCKER_VOLUME_MAX_SIZE_MB` — optional size cap; `0` (default) means no cap.
+4. Everything else is captured. A volume whose size cannot be measured is **always captured** — an unmeasurable volume is never silently dropped.
+
+Anything not captured is reported three times: in the agent log, in the bundle's `restore-notes.txt` (`⚠ VOLUMES NOT BACKED UP`), and — new in v3.6 — pushed to the Proxmox host, which repeats it in the final run summary and appends it to the Discord/mail alert. A data gap can no longer hide behind a SUCCESS message.
+
+**Copy consistency:** volumes are copied while containers run ("hot") unless `DOCKER_QUIESCE_STACKS=true`, in which case the containers using each volume are stopped for its copy and restarted afterwards. Hot copies of running databases (Postgres, MySQL/MariaDB, SQLite) may need crash recovery on restore and can, in the worst case, be inconsistent. Each captured volume is marked hot/cold in `restore-notes.txt`. For zero-downtime consistent copies, schedule an app-level dump (`pg_dump`, `mysqldump`) into a path listed in `EXTRA_PATHS` instead.
 
 ---
 
@@ -240,7 +266,7 @@ Triggers a native HA snapshot via the `ha` CLI.
 | `HAOS_PARTIAL_ADDONS` | `""` | Comma-separated add-on slugs (partial backup only) |
 | `HAOS_PARTIAL_FOLDERS` | `""` | Comma-separated folders (partial backup only): `homeassistant,ssl,share,media,addons/local` |
 
-> HA snapshots are commonly 200 MB – 2 GB. Set `VM_AGENT_KEEP_BUNDLES=1` in `config.sh` if USB space is limited.
+> HA snapshots are commonly 200 MB – 2 GB. Every dated backup contains one snapshot, so USB usage grows with `KEEP_BACKUPS` — lower it in `config.sh` if USB space is limited.
 
 **Examples:**
 

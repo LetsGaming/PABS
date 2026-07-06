@@ -330,3 +330,57 @@ usb_health_check() {
         _fail "    Replace the drive. Verify your latest backup and enable offsite sync."
     fi
 }
+
+# ---------------------------------------------------------------------------
+# usb_health_quick_probe MOUNT_POINT
+#
+# Lightweight probe for the BACKUP path — backup.sh calls this before every
+# run (audit BUG-04). pabs-status.sh runs the full four-signal check on
+# demand, but nothing guarantees it ever runs on a schedule; a dying backup
+# drive must be flagged on the path that DOES run on a schedule. This probe
+# runs only the always-reliable, read-only signals (ro-remount, dmesg, ext
+# superblock) and skips SMART, which is slow and unreliable through many USB
+# bridges — pabs-status.sh covers it.
+#
+# Results are mapped onto the backup logger: OK lines → log(), problems →
+# log_warn(). Problems are counted as WARNINGS rather than ERRORS on purpose:
+# the backup data path has its own write test and dual manifest verification,
+# and a failing drive is a reason to attempt the backup MORE urgently, not
+# less. backup.sh dispatches one aggregated alert when the return value is
+# non-zero.
+#
+# Returns the number of failing signals (0 = healthy / probe skipped).
+# ---------------------------------------------------------------------------
+usb_health_quick_probe() {
+    local mount="$1"
+
+    # Map the shared _usb_check_* helpers onto backup.sh's logger. These are
+    # only defined here because backup.sh does not define them; pabs-status.sh
+    # defines its own richer versions before calling usb_health_check and
+    # never calls this probe, so there is no collision.
+    _ok()   { log "  $*"; }
+    _warn() { log_warn "$*"; }
+    _fail() { log_warn "$*"; }
+
+    log "USB health probe (pre-backup)..."
+
+    local dev disk
+    dev=$(_usb_get_device "$mount")
+    if [[ -z "$dev" ]]; then
+        log_warn "USB health probe: cannot resolve block device for $mount — probe skipped"
+        return 0
+    fi
+    disk=$(_usb_get_disk "$dev")
+
+    local failures=0
+    _usb_check_ro_remount     "$mount"        || : $(( failures++ ))
+    _usb_check_dmesg          "$dev" "$disk"  || : $(( failures++ ))
+    _usb_check_ext_superblock "$dev"          || : $(( failures++ ))
+
+    if [[ $failures -gt 0 ]]; then
+        log_warn "USB health probe: $failures failing signal(s) — the backup drive may be failing. Run pabs-status.sh for the full report and plan a replacement."
+    else
+        log "  ✓ USB health probe passed (ro-remount / dmesg / ext superblock)"
+    fi
+    return "$failures"
+}

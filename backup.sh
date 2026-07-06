@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # PABS — Proxmox Automated Backup System
-# Version 3.5
+# Version 3.6
 #
 # Entry point. Sources config and library files, then runs the backup.
 # The only logic here is the top-level execution sequence.
@@ -15,7 +15,7 @@
 #   src/lib/preflight.sh         ← pre-flight validation checks
 #   src/lib/sections.sh          ← 8 backup section functions + helpers
 #   src/lib/host_health.sh       ← Proxmox host drive health checks (SMART, NVMe, dmesg)
-#   src/lib/usb_health.sh        ← USB backup drive health checks
+#   src/lib/usb_health.sh        ← USB backup drive health checks (status + pre-backup probe)
 #   src/helpers/manifest.sh      ← SHA256 manifest generation/verification, rotation
 #   src/helpers/output.sh        ← generates restore script and README inside each backup
 #   src/vm-agent/agent.sh        ← deployed to VMs/LXCs for lightweight agent backups
@@ -63,7 +63,7 @@ source "$PABS_DIR/config.sh"
 
 # Run-time vars — computed here so DATE is always the moment this run starts,
 # never the moment config.sh was last sourced.
-SCRIPT_VERSION="3.5"
+SCRIPT_VERSION="3.6"
 DATE=$(date +"%Y-%m-%d_%H-%M-%S")
 STAGE_DIR="$LOCAL_STAGE_BASE/.tmp-$DATE"
 FINAL_DIR="$BACKUP_ROOT/$DATE"
@@ -75,6 +75,7 @@ source "$PABS_DIR/src/lib/core.sh"
 source "$PABS_DIR/src/lib/offsite.sh"
 source "$PABS_DIR/src/lib/preflight.sh"
 source "$PABS_DIR/src/lib/sections.sh"
+source "$PABS_DIR/src/lib/usb_health.sh"
 source "$PABS_DIR/src/lib/validate.sh"
 source "$PABS_DIR/src/helpers/manifest.sh"
 source "$PABS_DIR/src/helpers/output.sh"
@@ -159,6 +160,23 @@ log "========================================"
 check_local_stage_space
 check_usb_space
 
+# --- USB health probe (audit BUG-04) ---------------------------------------
+# The full health check lives in pabs-status.sh, but nothing guarantees it
+# ever runs on a schedule. A dying backup drive must be flagged on the path
+# that DOES run on a schedule — this one. The probe covers the always-reliable
+# read-only signals (ro-remount, dmesg, ext superblock); problems raise a
+# warning and an alert, but the backup still proceeds — a failing drive is a
+# reason to attempt the backup MORE urgently, not less.
+probe_failures=0
+usb_health_quick_probe "$USB_MOUNT" || probe_failures=$?
+if [[ $probe_failures -gt 0 ]]; then
+    dispatch_alert "USB drive health warning before backup $DATE: $probe_failures failing signal(s) — the drive may be failing. The backup will still be attempted. Details: $LOG"
+fi
+
+# Collected by section_vm_agents from PABS-NOTICE agent output — items that
+# exist but were NOT backed up. Folded into the final summary and the alert.
+RUN_NOTICES=()
+
 maybe_run "mkdir staging $STAGE_DIR" mkdir -p "$STAGE_DIR"
 
 # --- Backup sections — all output goes to STAGE_DIR on local SSD --------
@@ -238,9 +256,14 @@ trap '_on_exit' ERR EXIT
 generate_restore_script
 generate_readme
 generate_dr_playbook
+
+# The three docs above are generated AFTER the manifest was built, so without
+# this they'd be the only files --verify could not cover (audit BUG-08).
+extend_manifest_on_usb "proxmox-restore.sh" "README.txt" "DISASTER-RECOVERY.md"
 sync
 
-# Belt-and-suspenders: re-verify the manifest against what landed on USB
+# Belt-and-suspenders: re-verify the manifest against what landed on USB.
+# This now also covers the generated docs appended above.
 verify_manifest_on_usb
 
 # Offsite sync — runs only if RCLONE_REMOTE is configured, non-fatal on failure
@@ -262,15 +285,31 @@ log "Warnings : $WARNINGS"
 log "Errors   : $ERRORS"
 log "========================================"
 
+# Skipped-item report (audit BUG-01/03): everything an agent reported as NOT
+# backed up is repeated here and appended to the alert, so a data gap can
+# never hide behind a SUCCESS exit or an unread mid-run log line.
+alert_suffix=""
+if [[ ${#RUN_NOTICES[@]} -gt 0 ]]; then
+    log "⚠  ${#RUN_NOTICES[@]} item(s) reported as NOT backed up / needing attention:"
+    for notice in "${RUN_NOTICES[@]}"; do
+        log "     - $notice"
+    done
+    log "========================================"
+    notice_preview=$(printf '%s; ' "${RUN_NOTICES[@]:0:3}")
+    notice_preview="${notice_preview%; }"
+    [[ ${#RUN_NOTICES[@]} -gt 3 ]] && notice_preview+=" (+$(( ${#RUN_NOTICES[@]} - 3 )) more, see log)"
+    alert_suffix=" | ⚠ ${#RUN_NOTICES[@]} item(s) NOT backed up: $notice_preview"
+fi
+
 if [[ $ERRORS -gt 0 ]]; then
     log "⚠  Backup finished with $ERRORS error(s). Review the log."
-    dispatch_alert "Backup $DATE finished with $ERRORS error(s). Review: $LOG"
+    dispatch_alert "Backup $DATE finished with $ERRORS error(s). Review: $LOG$alert_suffix"
     trap - ERR EXIT
     exit 1
 fi
 
 [[ $WARNINGS -gt 0 ]] && log "ℹ  $WARNINGS warning(s) — non-fatal, review log if unexpected."
 
-dispatch_alert "SUCCESS — backup $DATE complete. Size: $BACKUP_SIZE. Warnings: $WARNINGS"
+dispatch_alert "SUCCESS — backup $DATE complete. Size: $BACKUP_SIZE. Warnings: $WARNINGS$alert_suffix"
 
 exit 0
