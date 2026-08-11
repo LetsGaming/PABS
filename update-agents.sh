@@ -23,6 +23,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# shellcheck source=src/lib/env.sh
+source "$SCRIPT_DIR/src/lib/env.sh"
+normalize_path
+
 AGENT_SOURCE="$SCRIPT_DIR/src/vm-agent"
 CONFIG_FILE="$SCRIPT_DIR/config.sh"
 PABS_KNOWN_HOSTS="/root/.ssh/pabs_known_hosts"

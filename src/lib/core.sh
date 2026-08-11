@@ -11,8 +11,28 @@
 # Logging
 # ---------------------------------------------------------------------------
 
+# $LOG lives on the USB drive, which is precisely what is gone when an early
+# preflight check fails. Writing there unconditionally turned FATAL messages
+# into "tee: ...: No such device" noise in the cron log. Fall back to a local
+# file so the reason a run aborted is always recorded somewhere.
+PABS_FALLBACK_LOG="${PABS_FALLBACK_LOG:-/var/log/pabs-local.log}"
+
+_append_log() {
+    local line="$1"
+    local dir="${LOG%/*}"
+    [[ "$dir" == "$LOG" ]] && dir="."
+
+    if [[ -d "$dir" ]] && printf '%s\n' "$line" >> "$LOG" 2>/dev/null; then
+        return 0
+    fi
+    printf '%s\n' "$line" >> "$PABS_FALLBACK_LOG" 2>/dev/null || true
+}
+
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG"
+    local line
+    line="[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+    echo "$line"
+    _append_log "$line"
 }
 
 log_warn() {
@@ -30,6 +50,20 @@ log_err() {
 die() {
     log "FATAL: $*"
     exit 1
+}
+
+have_command() {
+    # Usage: have_command <cmd> <what-is-lost-without-it>
+    #
+    # Optional-dependency probe for sections that can degrade. On absence it
+    # states what will be missing from the backup, so a degraded run is never
+    # mistaken for a complete one. Callers that guard backup payload should
+    # also push a RUN_NOTICE; callers that guard diagnostics need not.
+    local cmd="$1" consequence="$2"
+
+    command -v "$cmd" >/dev/null 2>&1 && return 0
+    log_warn "$cmd not found in PATH — $consequence"
+    return 1
 }
 
 # ---------------------------------------------------------------------------

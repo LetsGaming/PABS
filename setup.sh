@@ -30,6 +30,11 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# shellcheck source=src/lib/env.sh
+source "$SCRIPT_DIR/src/lib/env.sh"
+normalize_path
+
 CONFIG="$SCRIPT_DIR/config.sh"
 TEMPLATE="$SCRIPT_DIR/config.template.sh"
 INSTALL_AGENT="$SCRIPT_DIR/install-agent.sh"

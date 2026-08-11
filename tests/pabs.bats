@@ -514,3 +514,147 @@ _source_docker() {
     [ "${#NOTICES[@]}" -eq 1 ]
     [[ "${NOTICES[0]}" == *"disabled by config"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# Environment normalization and dependency probes (src/lib/env.sh) — 3.6.1
+#
+# Regression cover for the cron failure: root's interactive PATH contains
+# /usr/sbin, cron's does not, so blkid vanished and check_usb_mounted blamed
+# the drive. These tests fail against 3.6.
+# ---------------------------------------------------------------------------
+
+_source_env() {
+    # shellcheck source=../src/lib/env.sh
+    source "$PABS_DIR/src/lib/env.sh"
+}
+
+# Build a fake system where blkid lives in an sbin dir and the rest do not,
+# mirroring Debian/Proxmox layout. Returns the two dirs via FAKE_SBIN/FAKE_BIN.
+_fake_system_dirs() {
+    FAKE_SBIN="$BATS_TEST_TMPDIR/usr/sbin"
+    FAKE_BIN="$BATS_TEST_TMPDIR/usr/bin"
+    mkdir -p "$FAKE_SBIN" "$FAKE_BIN"
+
+    printf '#!/bin/bash\ncase "$1" in\n  -U) [[ "$2" == "%s" ]] && { echo /dev/sde1; exit 0; }; exit 2 ;;\n  -s) echo ext4 ;;\nesac\n' \
+        "aaaabbbb-cccc-dddd-eeee-ffff00001111" > "$FAKE_SBIN/blkid"
+    printf '#!/bin/bash\necho /dev/sde1\n' > "$FAKE_BIN/findmnt"
+    printf '#!/bin/bash\nexit 0\n'         > "$FAKE_BIN/mountpoint"
+    chmod +x "$FAKE_SBIN/blkid" "$FAKE_BIN/findmnt" "$FAKE_BIN/mountpoint"
+}
+
+_source_preflight() {
+    TARGET_UUID="aaaabbbb-cccc-dddd-eeee-ffff00001111"
+    USB_MOUNT="$BATS_TEST_TMPDIR/usb"
+    mkdir -p "$USB_MOUNT"
+    log()      { echo "LOG: $*"; }
+    log_warn() { echo "WARN: $*"; }
+    die()      { echo "DIE: $*"; exit 1; }
+    # shellcheck source=../src/lib/env.sh
+    source "$PABS_DIR/src/lib/env.sh"
+    # shellcheck source=../src/lib/preflight.sh
+    source "$PABS_DIR/src/lib/preflight.sh"
+}
+
+@test "normalize_path: puts the sbin directories on PATH under a cron environment" {
+    _source_env
+    PATH="/usr/bin:/bin"
+    normalize_path
+    [[ "$PATH" == *"/usr/sbin"* ]]
+    [[ "$PATH" == *"/sbin"* ]]
+}
+
+@test "normalize_path: keeps caller directories so custom installs survive" {
+    _source_env
+    PATH="/opt/rclone/bin:/usr/bin:/bin"
+    normalize_path
+    [[ "$PATH" == *"/opt/rclone/bin"* ]]
+}
+
+@test "normalize_path: does not duplicate directories it already provides" {
+    _source_env
+    PATH="/usr/sbin:/usr/bin:/bin"
+    normalize_path
+    [ "$(tr ':' '\n' <<< "$PATH" | grep -c '^/usr/sbin$')" -eq 1 ]
+}
+
+@test "normalize_path: is idempotent" {
+    _source_env
+    PATH="/usr/bin:/bin"
+    normalize_path
+    local first="$PATH"
+    normalize_path
+    [ "$PATH" = "$first" ]
+}
+
+@test "missing_commands: reports every absent command and fails" {
+    _source_env
+    run missing_commands bash definitely-not-a-real-binary also-not-real
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"definitely-not-a-real-binary"* ]]
+    [[ "$output" == *"also-not-real"* ]]
+    [[ "$output" != *"bash"* ]]
+}
+
+@test "missing_commands: succeeds silently when everything is present" {
+    _source_env
+    run missing_commands bash
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "check_usb_mounted: passes when blkid is reachable" {
+    _fake_system_dirs
+    _source_preflight
+    PATH="$FAKE_SBIN:$FAKE_BIN:$PATH"
+    run check_usb_mounted
+    [ "$status" -eq 0 ]
+}
+
+@test "check_usb_mounted: a missing blkid names blkid, not the drive" {
+    _fake_system_dirs
+    _source_preflight
+    # sbin dropped: exactly what cron does to a Proxmox host
+    PATH="$FAKE_BIN:/usr/bin:/bin"
+    run check_usb_mounted
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"blkid"* ]]
+    [[ "$output" != *"drive not connected"* ]]
+}
+
+@test "check_usb_mounted: an absent UUID still reports the drive" {
+    _fake_system_dirs
+    _source_preflight
+    PATH="$FAKE_SBIN:$FAKE_BIN:$PATH"
+    TARGET_UUID="00000000-0000-0000-0000-000000000000"
+    run check_usb_mounted
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"drive not connected"* ]]
+}
+
+@test "check_dependencies: names all missing tools in one message" {
+    _source_preflight
+    PABS_REQUIRED_COMMANDS=(bash no-such-tool-one no-such-tool-two)
+    run check_dependencies
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no-such-tool-one"* ]]
+    [[ "$output" == *"no-such-tool-two"* ]]
+}
+
+@test "have_command: absence is logged with its consequence" {
+    _source_core
+    run have_command no-such-tool "VM definitions NOT backed up"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no-such-tool"* ]]
+    [[ "$output" == *"VM definitions NOT backed up"* ]]
+}
+
+@test "log: falls back to a local file when the USB log target is gone" {
+    _source_core
+    LOG="$BATS_TEST_TMPDIR/absent-usb/proxmox-backup/backup.log"
+    PABS_FALLBACK_LOG="$BATS_TEST_TMPDIR/pabs-local.log"
+
+    run log "FATAL: drive missing"
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"No such"* ]]
+    grep -q "FATAL: drive missing" "$PABS_FALLBACK_LOG"
+}

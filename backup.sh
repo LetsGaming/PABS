@@ -10,6 +10,7 @@
 #   backup.sh                    ← you are here (run this)
 #   config.sh                    ← edit this to configure your setup
 #   setup.sh                     ← interactive setup wizard (start here)
+#   src/lib/env.sh               ← PATH normalization, command probes (sourced first)
 #   src/lib/core.sh              ← logging, lock, trap, notifications
 #   src/lib/offsite.sh           ← rclone encryption, upload, retention pruning
 #   src/lib/preflight.sh         ← pre-flight validation checks
@@ -32,6 +33,12 @@ set -euo pipefail
 
 # Resolve the directory this script lives in, regardless of how it was called
 PABS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# PATH first, before config or any external command. cron hands this script
+# PATH=/usr/bin:/bin, which does not contain blkid, qm, pct or zpool.
+# shellcheck source=src/lib/env.sh
+source "$PABS_DIR/src/lib/env.sh"
+normalize_path
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -63,7 +70,7 @@ source "$PABS_DIR/config.sh"
 
 # Run-time vars — computed here so DATE is always the moment this run starts,
 # never the moment config.sh was last sourced.
-SCRIPT_VERSION="3.6"
+SCRIPT_VERSION="3.6.1"
 DATE=$(date +"%Y-%m-%d_%H-%M-%S")
 STAGE_DIR="$LOCAL_STAGE_BASE/.tmp-$DATE"
 FINAL_DIR="$BACKUP_ROOT/$DATE"
@@ -99,6 +106,7 @@ maybe_run() {
 # =============================================================================
 
 check_root
+check_dependencies
 check_usb_mounted
 
 # ---------------------------------------------------------------------------

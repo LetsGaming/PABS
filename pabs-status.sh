@@ -20,6 +20,11 @@ set -euo pipefail
 
 PABS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Health checks lean on smartctl, zpool, nvme and dumpe2fs, all under /usr/sbin.
+# shellcheck source=src/lib/env.sh
+source "$PABS_DIR/src/lib/env.sh"
+normalize_path
+
 JSON_MODE=false
 for arg in "$@"; do
     case "$arg" in

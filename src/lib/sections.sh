@@ -88,27 +88,42 @@ section_vm_ct_definitions() {
 
     # Export individual configs via qm/pct for human-readable restore reference.
     # Raw config files from pmxcfs are also copied as a secondary source.
+    #
+    # qm and pct are always present on a Proxmox host. If they are not on PATH
+    # the loops below read nothing and the section reports "VMs: 0 CTs: 0" —
+    # a backup that looks fine and contains none of the definitions it exists
+    # to preserve. Absence is treated as an error, not a skip.
     local vm_count=0
-    while IFS= read -r vmid; do
-        [[ -z "$vmid" ]] && continue
-        if qm config "$vmid" > "$vm_dest/vms/vm-${vmid}.conf" 2>>"$LOG"; then
-            log "  ✓ VM $vmid"
-            : $(( vm_count++ ))
-        else
-            log_warn "Could not export config for VM $vmid"
-        fi
-    done < <(qm list 2>/dev/null | awk 'NR>1{print $1}')
+    if have_command qm "per-VM config exports (qm config) NOT backed up"; then
+        while IFS= read -r vmid; do
+            [[ -z "$vmid" ]] && continue
+            if qm config "$vmid" > "$vm_dest/vms/vm-${vmid}.conf" 2>>"$LOG"; then
+                log "  ✓ VM $vmid"
+                : $(( vm_count++ ))
+            else
+                log_warn "Could not export config for VM $vmid"
+            fi
+        done < <(qm list 2>/dev/null | awk 'NR>1{print $1}')
+    else
+        log_err "VM definitions NOT exported — qm unavailable"
+        RUN_NOTICES+=("VM config exports NOT backed up — qm not found in PATH")
+    fi
 
     local ct_count=0
-    while IFS= read -r ctid; do
-        [[ -z "$ctid" ]] && continue
-        if pct config "$ctid" > "$vm_dest/containers/ct-${ctid}.conf" 2>>"$LOG"; then
-            log "  ✓ CT $ctid"
-            : $(( ct_count++ ))
-        else
-            log_warn "Could not export config for CT $ctid"
-        fi
-    done < <(pct list 2>/dev/null | awk 'NR>1{print $1}')
+    if have_command pct "per-CT config exports (pct config) NOT backed up"; then
+        while IFS= read -r ctid; do
+            [[ -z "$ctid" ]] && continue
+            if pct config "$ctid" > "$vm_dest/containers/ct-${ctid}.conf" 2>>"$LOG"; then
+                log "  ✓ CT $ctid"
+                : $(( ct_count++ ))
+            else
+                log_warn "Could not export config for CT $ctid"
+            fi
+        done < <(pct list 2>/dev/null | awk 'NR>1{print $1}')
+    else
+        log_err "CT definitions NOT exported — pct unavailable"
+        RUN_NOTICES+=("CT config exports NOT backed up — pct not found in PATH")
+    fi
 
     log "  VMs: $vm_count  CTs: $ct_count"
 
@@ -175,7 +190,12 @@ section_system_state() {
 
     backup_path "/etc/fstab" "fstab"
 
-    if [[ "$BACKUP_ZFS" == "true" ]]; then
+    # BACKUP_ZFS=true is an explicit request for the pool layout, so a missing
+    # zpool binary is a failed expectation rather than an absent feature.
+    if [[ "$BACKUP_ZFS" == "true" ]] && ! have_command zpool "ZFS pool layout NOT backed up"; then
+        log_err "ZFS pool layout NOT exported — zpool unavailable"
+        RUN_NOTICES+=("ZFS pool layout NOT backed up — zpool not found in PATH")
+    elif [[ "$BACKUP_ZFS" == "true" ]]; then
         backup_cmd_output "$s/zfs-pool-status.txt"       "ZFS pool status"               zpool status
         backup_cmd_output "$s/zfs-pool-status-by-id.txt" "ZFS pool status (by-id paths)" zpool status -P
         backup_cmd_output "$s/zfs-pool-list.txt"         "ZFS pool list"                 zpool list -v
@@ -193,7 +213,11 @@ section_system_state() {
 
     # LVM — export human-readable summaries and a machine-readable vgcfgbackup
     # that can be restored with: vgcfgrestore -f lvm-vg-<name>.cfg <vg-name>
-    if command -v vgs &>/dev/null && vgs &>/dev/null; then
+    # Unlike qm/pct/zpool, lvm2 is genuinely optional — a ZFS-only host has no
+    # LVM to export. Absence is stated in the log but is not a notice.
+    if ! command -v vgs &>/dev/null; then
+        log "  LVM layout skipped — lvm2 tools not installed"
+    elif vgs &>/dev/null; then
         backup_cmd_output "$s/lvm-pvs.txt" "LVM physical volumes" bash -c 'exec 9>&-; pvs --units b --nosuffix'
         backup_cmd_output "$s/lvm-vgs.txt" "LVM volume groups"    bash -c 'exec 9>&-; vgs --units b --nosuffix'
         backup_cmd_output "$s/lvm-lvs.txt" "LVM logical volumes"  bash -c 'exec 9>&-; lvs --units b --nosuffix'
@@ -427,8 +451,12 @@ section_vm_agents() {
     done
 
     if [[ -s "$AGENT_NOTICES_FILE" ]]; then
-        mapfile -t RUN_NOTICES < "$AGENT_NOTICES_FILE"
-        log_warn "${#RUN_NOTICES[@]} agent notice(s) collected — items NOT backed up or needing attention (repeated in the final summary)"
+        # Append at the current end of the array: earlier sections can raise
+        # notices too, and a plain mapfile assignment would discard them.
+        local agent_notice_count
+        agent_notice_count=$(wc -l < "$AGENT_NOTICES_FILE")
+        mapfile -t -O "${#RUN_NOTICES[@]}" RUN_NOTICES < "$AGENT_NOTICES_FILE"
+        log_warn "$agent_notice_count agent notice(s) collected — items NOT backed up or needing attention (repeated in the final summary)"
     fi
     rm -f "$AGENT_NOTICES_FILE"
 

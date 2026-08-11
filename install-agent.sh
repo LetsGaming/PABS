@@ -6,6 +6,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# shellcheck source=src/lib/env.sh
+source "$SCRIPT_DIR/src/lib/env.sh"
+normalize_path
+
 AGENT_SOURCE="$SCRIPT_DIR/src/vm-agent"
 REMOTE_DIR=""          # resolved after argument parsing; see below
 SSH_KEY=""

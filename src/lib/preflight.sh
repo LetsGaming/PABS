@@ -10,10 +10,30 @@ check_root() {
     [[ $EUID -eq 0 ]] || die "Run this script as root."
 }
 
+# Commands without which a run cannot be trusted: drive identification, the
+# USB transfer, and the integrity manifest. Proxmox-specific tools (qm, pct,
+# zpool) are checked per-section instead, so one absent tool degrades one
+# section loudly rather than aborting an otherwise usable backup.
+PABS_REQUIRED_COMMANDS=(blkid findmnt mountpoint rsync tar sha256sum flock)
+
+check_dependencies() {
+    local -a missing=()
+    mapfile -t missing < <(missing_commands "${PABS_REQUIRED_COMMANDS[@]}")
+
+    [[ ${#missing[@]} -eq 0 ]] && return 0
+    die "Missing required command(s): ${missing[*]}. PATH=$PATH"
+}
+
 check_usb_mounted() {
     # UUID validation — ensures we write to the exact partition we expect,
     # not just whatever happens to be mounted at USB_MOUNT.
     if [[ -n "$TARGET_UUID" ]]; then
+        # An absent blkid and an absent drive are different failures. Reporting
+        # both as "drive not connected" is what made the cron breakage look
+        # like a hardware problem for weeks.
+        command -v blkid >/dev/null 2>&1 \
+            || die "blkid not found in PATH ($PATH) — cannot verify the backup drive UUID."
+
         local dev_path
         dev_path=$(blkid -U "$TARGET_UUID" 2>/dev/null || true)
         [[ -n "$dev_path" ]] \
