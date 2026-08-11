@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # PABS — Proxmox Automated Backup System
-# Version 3.6
+# Version defined in src/lib/env.sh (PABS_VERSION)
 #
 # Entry point. Sources config and library files, then runs the backup.
 # The only logic here is the top-level execution sequence.
@@ -70,7 +70,8 @@ source "$PABS_DIR/config.sh"
 
 # Run-time vars — computed here so DATE is always the moment this run starts,
 # never the moment config.sh was last sourced.
-SCRIPT_VERSION="3.6.1"
+# SCRIPT_VERSION is kept as the name the libs and generated docs already use.
+SCRIPT_VERSION="$PABS_VERSION"
 DATE=$(date +"%Y-%m-%d_%H-%M-%S")
 STAGE_DIR="$LOCAL_STAGE_BASE/.tmp-$DATE"
 FINAL_DIR="$BACKUP_ROOT/$DATE"

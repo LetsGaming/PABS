@@ -658,3 +658,38 @@ _source_preflight() {
     [[ "$output" != *"No such"* ]]
     grep -q "FATAL: drive missing" "$PABS_FALLBACK_LOG"
 }
+
+# ---------------------------------------------------------------------------
+# Version reporting (src/lib/env.sh + setup/steps/welcome.sh) — 3.6.1
+#
+# The wizard used to scrape SCRIPT_VERSION out of config.sh, which never
+# defined it, so the banner printed an empty version.
+# ---------------------------------------------------------------------------
+
+@test "PABS_VERSION: env.sh defines a non-empty version" {
+    _source_env
+    [ -n "$PABS_VERSION" ]
+    [[ "$PABS_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]
+}
+
+@test "PABS_VERSION: backup.sh carries no second version literal" {
+    run grep -E '^SCRIPT_VERSION="[0-9]' "$PABS_DIR/backup.sh"
+    [ "$status" -ne 0 ]
+}
+
+@test "welcome banner: prints the real version, not an empty string" {
+    _source_env
+    BOLD=""; CYAN=""; RESET=""; DIM=""; GREEN=""
+    CONFIG="$BATS_TEST_TMPDIR/config.sh"
+    cp "$PABS_DIR/config.template.sh" "$CONFIG"
+    clear()  { :; }
+    _dim()   { echo "$*"; }
+    _pause() { :; }
+    # shellcheck source=../src/setup/steps/welcome.sh
+    source "$PABS_DIR/src/setup/steps/welcome.sh"
+
+    run _step_welcome
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Version: $PABS_VERSION"* ]]
+    [[ "$output" != *"Version: "$'\n'* ]]
+}

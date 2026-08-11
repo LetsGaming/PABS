@@ -15,7 +15,7 @@ _step_welcome() {
   Proxmox Automated Backup System
 BANNER
     echo "${RESET}"
-    _dim "Version: $(grep '^SCRIPT_VERSION=' "$CONFIG" | cut -d'"' -f2)"
+    _dim "Version: $PABS_VERSION"
     _dim "Config:  $CONFIG"
     echo ""
     echo "  This wizard will guide you through:"

@@ -24,6 +24,12 @@ PABS_ENV_SOURCED=1
 PABS_BASE_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 readonly PABS_BASE_PATH
 
+# Single source of truth for the release version. Lives here because env.sh is
+# the one file every entry point sources, so backup.sh and the setup wizard
+# cannot drift apart or scrape it out of the wrong file.
+PABS_VERSION="3.6.1"
+readonly PABS_VERSION
+
 normalize_path() {
     # Standard system directories take precedence, so a run always resolves
     # blkid, qm and friends. Directories the caller already had are kept as a
