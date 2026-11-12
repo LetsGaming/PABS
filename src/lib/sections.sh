@@ -391,8 +391,8 @@ section_vm_agents() {
                 continue
             fi
 
-            local dest_file="$local_dest/$(basename "$remote_file")"
-            local want_bytes got_bytes
+            local dest_file want_bytes got_bytes
+            dest_file="$local_dest/$(basename "$remote_file")"
             want_bytes=$(ssh "${ssh_opts[@]}" "$ssh_user@$vm_host" \
                 "wc -c < '$remote_file'" 2>>"$LOG" | tr -d '[:space:]')
             if ssh "${ssh_opts[@]}" "$ssh_user@$vm_host" "cat '$remote_file'" \
