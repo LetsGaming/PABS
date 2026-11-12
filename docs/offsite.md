@@ -68,7 +68,7 @@ RCLONE_KEEP_MAX=4           # prune oldest when count exceeds this
 RCLONE_MAX_STORAGE_GB=0     # hard storage cap in GB (0 = unlimited)
 ```
 
-After each successful upload, PABS lists all backup directories on the remote. If count exceeds `RCLONE_KEEP_MAX`, the oldest backups are marked for deletion. If total usage exceeds `RCLONE_MAX_STORAGE_GB`, more are marked. `RCLONE_KEEP_MIN` is applied as a final safety gate — PABS never deletes the last N copies regardless of other limits.
+After each successful upload, PABS lists all backup archives (`<DATE>.tar.zst[.gpg]`) on the remote. If count exceeds `RCLONE_KEEP_MAX`, the oldest backups are marked for deletion. If total usage exceeds `RCLONE_MAX_STORAGE_GB`, more are marked. `RCLONE_KEEP_MIN` is applied as a final safety gate — PABS never deletes the last N copies regardless of other limits.
 
 **Free-tier sizing:**
 
@@ -88,52 +88,51 @@ RCLONE_MAX_STORAGE_GB=4
 
 ## Encryption
 
-By default, the remote receives backup data in plaintext. Anyone with access to the remote — including the provider — can read it. This includes sensitive content in VM agent bundles: `.env` files, SSH keys, API tokens.
+By default, the remote receives the archive in plaintext. Anyone with access to the remote, including the provider, can read it. This includes sensitive content in VM agent bundles: `.env` files, SSH keys, API tokens.
 
-PABS supports transparent AES-256 encryption via rclone's built-in `crypt` backend. The provider sees only opaque encrypted blobs; filenames are encrypted too.
+PABS encrypts each archive with GPG (AES-256) before upload. The provider sees only an opaque `<DATE>.tar.zst.gpg` file. There are two methods.
 
-### Setup
+### Symmetric (default)
 
-No extra `rclone config` steps required. Set the password in `config.sh`:
+Set a passphrase in `config.sh`:
 
 ```bash
 RCLONE_ENCRYPTION_PASSWORD="a strong passphrase"
-RCLONE_ENCRYPTION_SALT=""       # optional second factor; recommended
 ```
 
-PABS creates an ephemeral `pabs_crypt_runtime` crypt remote at runtime, wrapping your base `RCLONE_REMOTE`. The same password always produces the same key material (via scrypt derivation), so existing offsite data remains readable across backup runs.
+The same passphrase encrypts and decrypts, so it must be available on or near this host.
 
-### The salt (`RCLONE_ENCRYPTION_SALT`)
+### Public key
 
-rclone's `password2` — a second passphrase that prevents rainbow-table attacks against the main password. Recommended if your main password is short or memorable. Both passwords are required for decryption.
+The private key needed to decrypt never lives on this host. Import the recipient public key into root's keyring, then set:
+
+```bash
+gpg --import recipient-public-key.asc
+
+RCLONE_ENCRYPTION_METHOD="gpg-key"
+RCLONE_ENCRYPTION_RECIPIENT="backups@example.com"
+```
 
 ### Keeping the passphrase safe
 
 - Store it in a password manager (Bitwarden, 1Password, KeePass), separately from the USB stick.
 - PABS automatically redacts it from the `config.sh` copy written to USB.
-- The `DISASTER-RECOVERY.md` generated inside each backup contains the exact `rclone config create` command needed to reconstruct the crypt remote at restore time.
+- The `DISASTER-RECOVERY.md` generated inside each backup contains the exact decrypt command for your method.
 
 ### Verifying encryption is active
-
-After a backup with encryption enabled:
 
 ```bash
 rclone lsf gdrive:proxmox-backup
 ```
 
-You should see only encrypted filenames — random-looking strings, not date-formatted directory names. Readable names mean encryption is not active.
+Archive names must end in `.tar.zst.gpg`. Names ending in `.tar.zst` mean the upload was not encrypted.
 
-Access and verify the encrypted data directly:
+If `gpg` is missing, PABS logs a warning and uploads the archive unencrypted. If `gpg` fails, the upload is skipped.
+
+### Decrypting
 
 ```bash
-rclone config create pabs_crypt_runtime crypt \
-    remote                    "gdrive:proxmox-backup" \
-    filename_encryption       standard \
-    directory_name_encryption true \
-    password                  "$(rclone obscure 'your passphrase')" \
-    password2                 "$(rclone obscure 'your salt')"   # omit if no salt
-
-rclone lsf pabs_crypt_runtime:    # should show date-formatted directory names
+gpg -d <DATE>.tar.zst.gpg | tar --use-compress-program=zstd -xf -
 ```
 
 ---
@@ -158,7 +157,7 @@ To avoid token expiry entirely: Backblaze B2, Wasabi, and SFTP-based remotes use
 
 ## What is and is not synced
 
-**Synced:** the final backup directory (`BACKUP_ROOT/<date>/`) — all PABS-staged data: Proxmox configs, VM/CT definitions, system state, VM agent bundles, the restore script, the DR playbook, and the SHA256 manifest.
+**Synced:** one archive of the final backup directory (`BACKUP_ROOT/<date>/`), uploaded as `<date>.tar.zst` or `<date>.tar.zst.gpg`. It holds all PABS-staged data: Proxmox configs, VM/CT definitions, system state, VM agent bundles, the restore script, the DR playbook, and the SHA256 manifest.
 
 **Not synced:**
 

@@ -11,8 +11,8 @@ A complete backup run moves data through three locations:
 ```
 1. Proxmox SSD (staging)              2. USB stick                    3. Offsite remote
 /var/tmp/pabs-stage/                   /mnt/backup-usb/                gdrive:proxmox-backup/
-└── .tmp-2026-06-01_03-00-00/         └── proxmox-backup/             └── 2026-06-01_03-00-00/
-    ├── etc/                               ├── 2026-06-01_03-00-00/       (rclone-synced copy)
+└── .tmp-2026-06-01_03-00-00/         └── proxmox-backup/             └── 2026-06-01_03-00-00.tar.zst[.gpg]
+    ├── etc/                               ├── 2026-06-01_03-00-00/       (one archive per backup)
     ├── etc-pve.tar                        │   ├── etc/
     ├── vm-ct-definitions/                 │   ├── etc-pve.tar
     ├── system-state/                      │   ├── vm-ct-definitions/
@@ -43,13 +43,16 @@ backup.sh
 ├── source helpers/output.sh
 │
 ├── check_root                 must run as root
+├── check_dependencies         blkid, findmnt, mountpoint, rsync, tar, sha256sum, flock
 ├── check_usb_mounted          USB at USB_MOUNT, UUID matches TARGET_UUID,
 │                              write-test confirms not read-only
+├── validate_config            every config value checked once, up front
 ├── mkdir BACKUP_ROOT + LOCAL_STAGE_BASE
+├── acquire_lock               flock on LOCK_FILE; aborts if already held
 ├── check_local_stage_space    estimates needed space + 20% margin; hard-fails if too low
 ├── check_usb_space            same estimate; auto-purges oldest backup if recoverable
+├── usb_health_quick_probe     ro-remount, dmesg, ext superblock; warns, never aborts
 ├── mkdir STAGE_DIR
-├── acquire_lock               flock on LOCK_FILE; aborts if already held
 │
 ├── SECTION 1: section_proxmox_configs      /etc/pve/ tar, network, hosts, APT sources
 ├── SECTION 2: section_vm_ct_definitions    qm config + pct config exports; raw pmxcfs configs
@@ -73,6 +76,7 @@ backup.sh
 ├── generate_restore_script    proxmox-restore.sh (self-contained, baked hostname/version)
 ├── generate_readme            README.txt
 ├── generate_dr_playbook       DISASTER-RECOVERY.md (hostname/version/disk-layout-specific)
+├── extend_manifest_on_usb     append the three generated docs to MANIFEST.sha256
 │
 ├── verify_manifest_on_usb     re-verify MANIFEST.sha256 on USB after transfer
 ├── offsite_sync               rclone to remote (if configured; non-fatal on failure)
@@ -215,7 +219,7 @@ Keys always redacted:
 - `DISCORD_WEBHOOK`, `NOTIFY_EMAIL`, `PORTAINER_TOKEN`
 - `RCLONE_ENCRYPTION_PASSWORD`, `RCLONE_ENCRYPTION_SALT`
 
-Generic catch-all — any variable whose name contains `Password`, `Secret`, `_TOKEN`, `_KEY`, or `WEBHOOK` (case-insensitive for `Password`/`Secret`), with a value of at least 4 characters.
+Generic catch-all: any variable whose name contains `Password`, `Passphrase`, `Secret`, `_TOKEN`, `_KEY`, or `WEBHOOK` (case-insensitive for `Password`/`Passphrase`/`Secret`). The value is replaced with `"<REDACTED>"`.
 
 Redaction uses `sed` on a copy in the staging directory.
 
@@ -223,20 +227,20 @@ Redaction uses `sed` on a copy in the staging directory.
 
 ## Offsite encryption
 
-When `RCLONE_ENCRYPTION_PASSWORD` is set, `_offsite_effective_remote` in `lib/offsite.sh` calls:
+Each backup is uploaded as one archive: `<DATE>.tar.zst`, or `<DATE>.tar.zst.gpg` when encryption is on. `lib/offsite.sh` builds the archive under `LOCAL_STAGE_BASE` (or `OFFSITE_TMP_DIR`), never in `/tmp`.
+
+Two encryption methods use GPG:
+
+- **`symmetric`** (default): AES-256 with `RCLONE_ENCRYPTION_PASSWORD`, passed to `gpg` on stdin.
+- **`gpg-key`**: public-key encryption to `RCLONE_ENCRYPTION_RECIPIENT`. The private key never lives on the host.
+
+If encryption is requested but `gpg` is missing, PABS warns and uploads the archive unencrypted. If `gpg` fails, the upload is skipped.
+
+Decrypt and extract:
 
 ```bash
-rclone config create pabs_crypt_runtime crypt \
-    remote                    "$RCLONE_REMOTE" \
-    filename_encryption       standard \
-    directory_name_encryption true \
-    password                  "$(rclone obscure "$RCLONE_ENCRYPTION_PASSWORD")" \
-    password2                 "$(rclone obscure "${RCLONE_ENCRYPTION_SALT:-}")"
+gpg -d <DATE>.tar.zst.gpg | tar --use-compress-program=zstd -xf -
 ```
-
-This creates or overwrites the named rclone remote `pabs_crypt_runtime` at runtime. Because rclone's crypt remote is deterministic — the same password and salt always produce the same key material (derived via scrypt) — overwriting the config each run is idempotent and existing offsite data remains readable.
-
-`rclone obscure` converts the plaintext password to rclone's config storage format (simple XOR, not the encryption key itself). The actual AES-256 key is derived from the passwords using scrypt. All subsequent rclone operations use `pabs_crypt_runtime:`, including retention pruning, so they operate through the crypt layer and see decrypted directory names.
 
 ---
 
@@ -253,7 +257,7 @@ Runs after each successful upload in two passes:
 1. **Count pass** — marks oldest backups for deletion if count > `RCLONE_KEEP_MAX`.
 2. **Storage pass** — iterates oldest-first, estimating remaining usage locally, until usage drops below `RCLONE_MAX_STORAGE_GB`.
 
-`RCLONE_KEEP_MIN` is then applied as a safety gate: items are removed from the delete list (newest first) until survivors ≥ `RCLONE_KEEP_MIN`. Deletions use `rclone purge`. Failures on individual deletions are non-fatal.
+`RCLONE_KEEP_MIN` is then applied as a safety gate: items are removed from the delete list (newest first) until survivors ≥ `RCLONE_KEEP_MIN`. Deletions use `rclone deletefile`. Failures on individual deletions are non-fatal. The storage pass uses the real per-file sizes from `rclone lsf`.
 
 ---
 

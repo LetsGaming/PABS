@@ -252,7 +252,7 @@ The offsite sync runs after each successful USB commit. Failure is non-fatal —
 
 **Type:** string | **Default:** `""` (disabled)
 
-rclone remote name and path. Configure the base remote with `rclone config`. PABS handles encryption on top transparently.
+rclone remote name and path. Configure the base remote with `rclone config`. PABS encrypts each archive with GPG before upload (see below).
 
 ```bash
 RCLONE_REMOTE=""                               # disabled
@@ -266,7 +266,7 @@ RCLONE_REMOTE="hetzner-sftp:backup/proxmox"   # Hetzner Storage Box
 
 **Type:** string | **Default:** `"--bwlimit 5M"`
 
-Extra flags passed to every `rclone sync` call. Word-split by the shell before use — do not include glob characters (e.g. `--filter='*.bak'`), as they undergo filename expansion.
+Extra flags passed to the `rclone copyto` upload. Word-split by the shell before use — do not include glob characters (e.g. `--filter='*.bak'`), as they undergo filename expansion.
 
 ```bash
 RCLONE_EXTRA_OPTS="--bwlimit 5M"               # cap upload at 5 MB/s
@@ -323,7 +323,7 @@ RCLONE_MAX_STORAGE_GB=14    # fit within Google Drive's 15 GB free tier
 
 **Type:** string | **Default:** `""` (disabled)
 
-Main passphrase for offsite encryption. When set, PABS wraps `RCLONE_REMOTE` with rclone's `crypt` remote at runtime. The provider sees only AES-256 encrypted blobs; filenames are encrypted too.
+Passphrase for offsite encryption. When set, each archive is encrypted with GPG (AES-256, symmetric) before upload. The provider sees only an opaque `.tar.zst.gpg` file.
 
 Store this passphrase in a password manager, separately from the USB stick. It is required to decrypt the offsite data and is automatically redacted from the `config.sh` copy written to USB.
 
@@ -332,15 +332,21 @@ RCLONE_ENCRYPTION_PASSWORD=""                    # disabled
 RCLONE_ENCRYPTION_PASSWORD="a strong passphrase"
 ```
 
-### `RCLONE_ENCRYPTION_SALT`
+### `RCLONE_ENCRYPTION_METHOD`
 
-**Type:** string | **Default:** `""` (disabled)
+**Type:** `"symmetric"` | `"gpg-key"` | **Default:** `""` (means `symmetric`)
 
-Optional second passphrase (rclone `password2`). Protects against rainbow-table attacks on the main password. Recommended if your main password is short or memorable. Also redacted from the USB copy.
+`symmetric` uses `RCLONE_ENCRYPTION_PASSWORD`. `gpg-key` encrypts to a recipient public key, so the private key never lives on this host. It needs `RCLONE_ENCRYPTION_RECIPIENT` and the recipient public key in root's keyring (`gpg --import recipient.asc`).
+
+### `RCLONE_ENCRYPTION_RECIPIENT`
+
+**Type:** string | **Default:** `""`
+
+Key id, fingerprint or email of the recipient. Used only when `RCLONE_ENCRYPTION_METHOD="gpg-key"`.
 
 ```bash
-RCLONE_ENCRYPTION_SALT=""
-RCLONE_ENCRYPTION_SALT="another passphrase"
+RCLONE_ENCRYPTION_METHOD="gpg-key"
+RCLONE_ENCRYPTION_RECIPIENT="backups@example.com"
 ```
 
 ### Free-tier configuration examples
@@ -369,9 +375,9 @@ RCLONE_ENCRYPTION_PASSWORD="your passphrase"
 
 ## Secret redaction
 
-`config.sh` is copied into every backup for restore reference. The following values are redacted (replaced with empty strings) before writing to USB — the original `config.sh` on the host is never modified.
+`config.sh` is copied into every backup for restore reference. The following values are replaced with `"<REDACTED>"` before writing to USB. The original `config.sh` on the host is never modified.
 
-Keys always redacted regardless of value length:
+Keys always redacted:
 
 - `DISCORD_WEBHOOK`
 - `NOTIFY_EMAIL`
@@ -379,7 +385,7 @@ Keys always redacted regardless of value length:
 - `RCLONE_ENCRYPTION_PASSWORD`
 - `RCLONE_ENCRYPTION_SALT`
 
-Generic catch-all — any variable name containing `Password`, `Secret`, `_TOKEN`, `_KEY`, or `WEBHOOK` (case-insensitive for `Password`/`Secret`) with a value of at least 4 characters.
+Generic catch-all: any variable name containing `Password`, `Passphrase`, `Secret`, `_TOKEN`, `_KEY`, or `WEBHOOK` (case-insensitive for `Password`/`Passphrase`/`Secret`).
 
 ---
 
@@ -389,7 +395,7 @@ Derived automatically. Marked `readonly` after sourcing. Do not edit.
 
 | Variable | Value |
 | :------- | :---- |
-| `SCRIPT_VERSION` | Current PABS version string |
+| `SCRIPT_VERSION` | Current PABS version string (from `PABS_VERSION` in `src/lib/env.sh`) |
 | `DATE` | Timestamp for this run (`YYYY-MM-DD_HH-MM-SS`) |
 | `BACKUP_ROOT` | `$USB_MOUNT/proxmox-backup/` |
 | `STAGE_DIR` | `$LOCAL_STAGE_BASE/.tmp-$DATE/` |

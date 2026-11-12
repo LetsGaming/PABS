@@ -168,46 +168,41 @@ Use this when the USB stick is lost, damaged, or unavailable.
 
 ### Prerequisites
 
-You need `RCLONE_ENCRYPTION_PASSWORD` and `RCLONE_ENCRYPTION_SALT` (if set). Retrieve them from your password manager before proceeding — without them the offsite data cannot be decrypted.
+If the archive is encrypted (`.tar.zst.gpg`), you need either the `RCLONE_ENCRYPTION_PASSWORD` passphrase (symmetric) or the GPG private key matching `RCLONE_ENCRYPTION_RECIPIENT` (public key). Retrieve it from your password manager before proceeding. Without it the offsite data cannot be decrypted.
 
-### Step 1 — Install rclone and configure the base remote
+### Step 1 - Install tooling and configure the base remote
 
 ```bash
-apt install rclone
+apt install rclone zstd gnupg
 rclone config    # re-configure the same remote as on the original host
 ```
 
-### Step 2 — Re-create the encryption wrapper
-
-Skip this step if encryption was not enabled.
+### Step 2 - Download the archive
 
 ```bash
-rclone config create pabs_crypt_runtime crypt \
-    remote                    "gdrive:proxmox-backup" \
-    filename_encryption       standard \
-    directory_name_encryption true \
-    password                  "$(rclone obscure 'YOUR_MAIN_PASSWORD')" \
-    password2                 "$(rclone obscure 'YOUR_SALT')"   # omit if no salt
-```
+# List available archives
+rclone lsf gdrive:proxmox-backup --files-only | sort
 
-Use `pabs_crypt_runtime:` as the remote going forward.
-
-### Step 3 — Download the backup
-
-```bash
-# List available backups
-rclone lsf pabs_crypt_runtime:     # with encryption
-rclone lsf gdrive:proxmox-backup   # without encryption
-
-# Download a specific backup
+# Download one (adjust the name; add .gpg if encrypted)
 mkdir -p /mnt/restore
-rclone copy "pabs_crypt_runtime:<YYYY-MM-DD_HH-MM-SS>" /mnt/restore/ --progress
+rclone copy "gdrive:proxmox-backup/<YYYY-MM-DD_HH-MM-SS>.tar.zst.gpg" /mnt/restore/ --progress
+cd /mnt/restore
 ```
 
-### Step 4 — Verify and restore
+### Step 3 - Decrypt and extract
 
 ```bash
-cd /mnt/restore
+# Symmetric: gpg prompts for the passphrase. Public key: import the private key first.
+gpg -d <YYYY-MM-DD_HH-MM-SS>.tar.zst.gpg | tar --use-compress-program=zstd -xf -
+
+# Unencrypted archive:
+tar --use-compress-program=zstd -xf <YYYY-MM-DD_HH-MM-SS>.tar.zst
+```
+
+### Step 4 - Verify and restore
+
+```bash
+cd <YYYY-MM-DD_HH-MM-SS>
 sha256sum --check MANIFEST.sha256
 chmod +x proxmox-restore.sh
 ./proxmox-restore.sh
@@ -298,11 +293,7 @@ The restore script handles VM bundle restore with prompts:
 ./proxmox-restore.sh --section vm-agents
 ```
 
-It lists available bundles, prompts per VM, and handles type-specific steps. For Minecraft VMs that received a new IP after a hardware rebuild:
-
-```bash
-./proxmox-restore.sh --section vm-agents --mc-ip 192.168.1.41
-```
+It lists each bundle with its `restore-notes.txt` and prints the commands to inspect and extract it. It does not extract anything itself. Follow the notes inside each bundle for the type-specific steps.
 
 ---
 

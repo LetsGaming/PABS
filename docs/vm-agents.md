@@ -12,7 +12,7 @@ No disk images are involved. Each bundle includes a `restore-notes.txt` with typ
 | :--- | :-------- | :---------------- |
 | `docker` | `docker` CLI present | All compose files + `.env` files, Docker daemon config, **all named volumes** (opt-out via exclude list / size cap), package list |
 | `haos` | `ha` CLI present + `/config/configuration.yaml` exists | Full native HA snapshot (`.tar`) via `ha` CLI — one-click restore in the HA UI |
-| `minecraft` | `minecraft` system user, or `MINECRAFT_BASE` directory present | Weekly `.tar.zst` archives from [minecraft-server-setup](https://github.com/LetsGaming/minecraft-server-setup), server config files, mods/plugins |
+| `minecraft` | `minecraft` system user, or `MINECRAFT_BASE` directory present | Weekly `.tar.zst` archives from [minecraft-server-setup](https://github.com/LetsGaming/minecraft-server-setup), plus `EXTRA_PATHS` |
 | `generic` | everything else | `/etc/` (full), cron jobs, `/usr/local/bin/`, `/root/scripts/`, package list |
 
 Detection runs in the order above — first match wins. Override with `--set PABS_TYPE=<type>` during installation.
@@ -75,7 +75,6 @@ chmod +x /opt/pabs/install-agent.sh
 # Pass configuration at install time
 ./install-agent.sh alice@192.168.1.40 \
     --set MINECRAFT_BASE=/home/alice/servers/backups \
-    --set MINECRAFT_SERVER_BASE=/home/alice/servers \
     --set MC_KEEP_WEEKLY=2
 ```
 
@@ -295,11 +294,9 @@ Designed to work with [minecraft-server-setup](https://github.com/LetsGaming/min
 | Variable | Default | Description |
 | :------- | :------ | :---------- |
 | `MINECRAFT_BASE` | `/home/minecraft/minecraft-server/backups` | Parent directory containing per-instance backup folders |
-| `MINECRAFT_SERVER_BASE` | `/home/minecraft/minecraft-server` | Server root — used to capture `server.properties`, mods, plugins |
 | `MC_KEEP_WEEKLY` | `4` | How many weekly archives to include per instance |
 | `MC_KEEP_DAILY` | `0` | How many daily archives to include (0 = skip dailies entirely) |
 | `MC_MIN_AGE_MINUTES` | `5` | Only include archives older than this — guards against in-progress compression |
-| `MC_INCLUDE_MODS` | `true` | Include the `mods/` directory from each server instance |
 | `EXTRA_PATHS` | `""` | Space-separated extra paths to always include (universal — works across all agent types) |
 
 **Examples:**
@@ -310,8 +307,7 @@ Designed to work with [minecraft-server-setup](https://github.com/LetsGaming/min
 
 # Non-default username
 ./install-agent.sh alice@192.168.1.40 \
-    --set MINECRAFT_BASE=/home/alice/minecraft-server/backups \
-    --set MINECRAFT_SERVER_BASE=/home/alice/minecraft-server
+    --set MINECRAFT_BASE=/home/alice/minecraft-server/backups
 
 # Multiple instances with daily archives
 ./install-agent.sh minecraft@192.168.1.40 \

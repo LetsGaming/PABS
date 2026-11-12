@@ -94,7 +94,7 @@ All data stages on the host SSD first, is SHA256-verified, then transferred to U
 | :--- | :---------------- |
 | `docker` | All `docker-compose.yml` + `.env` files, **all named volumes** (opt-out via exclude list / size cap), daemon config |
 | `haos` | Full native HA snapshot via `ha` CLI — one-click restore in the HA UI |
-| `minecraft` | Weekly `.tar.zst` archives, `server.properties`, mods, plugins |
+| `minecraft` | Weekly (optionally daily) `.tar.zst` archives from minecraft-server-setup, plus `EXTRA_PATHS` |
 | `generic` | `/etc/` (full), cron jobs, `/usr/local/bin/`, `/root/scripts/`, package list |
 
 VM disk images are not backed up. Agent bundles contain full application state. Rebuild path: fresh OS → `install-agent.sh` → restore bundle.

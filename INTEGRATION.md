@@ -25,8 +25,7 @@ Run once per VM from the Proxmox host:
 
 # Pass configuration at install time — no manual SSH into the VM afterwards
 ./install-agent.sh alice@<mc-vm-ip> \
-    --set MINECRAFT_BASE=/home/alice/minecraft-server/backups \
-    --set MINECRAFT_SERVER_BASE=/home/alice/minecraft-server
+    --set MINECRAFT_BASE=/home/alice/minecraft-server/backups
 
 ./install-agent.sh root@<docker-vm-ip> \
     --set DOCKER_MANAGER=portainer \
@@ -61,7 +60,7 @@ sudo /opt/pabs/backup.sh
 | :--- | :------------ |
 | `docker` | `DOCKER_MANAGER` (`auto`/`none`/`dockge`/`portainer`), `DOCKGE_STACKS_DIR`, `PORTAINER_TOKEN`, `PORTAINER_URL`, `DOCKER_INCLUDE_VOLUMES`, `DOCKER_EXCLUDE_VOLUMES`, `DOCKER_VOLUME_MAX_SIZE_MB`, `DOCKER_QUIESCE_STACKS` |
 | `haos` | `HAOS_BACKUP_TYPE` (`full`/`partial`), `HAOS_BACKUP_PASSWORD`, `HAOS_KEEP_ON_HOST`, `HAOS_WAIT_SECONDS` |
-| `minecraft` | `MINECRAFT_BASE`, `MINECRAFT_SERVER_BASE`, `MC_KEEP_WEEKLY`, `MC_KEEP_DAILY`, `MC_MIN_AGE_MINUTES` |
+| `minecraft` | `MINECRAFT_BASE`, `MC_KEEP_WEEKLY`, `MC_KEEP_DAILY`, `MC_MIN_AGE_MINUTES` |
 | `generic` | `EXTRA_PATHS`, `GENERIC_EXCLUDE_PATHS`, `GENERIC_INCLUDE_ETC`, `GENERIC_INCLUDE_PACKAGES` |
 | all types | `PABS_TYPE` (override auto-detection), `AGENT_LABEL`, `EXTRA_PATHS` |
 
