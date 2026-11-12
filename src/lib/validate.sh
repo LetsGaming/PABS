@@ -19,13 +19,13 @@ validate_config() {
     local errors=0
 
     # --- Required paths ---
-    [[ -n "${USB_MOUNT:-}" ]]        || { log_err "USB_MOUNT is empty in config.sh"; (( errors++ )); }
-    [[ -n "${LOCAL_STAGE_BASE:-}" ]] || { log_err "LOCAL_STAGE_BASE is empty in config.sh"; (( errors++ )); }
-    [[ -n "${BACKUP_ROOT:-}" ]]      || { log_err "BACKUP_ROOT is empty (derived from USB_MOUNT)"; (( errors++ )); }
+    [[ -n "${USB_MOUNT:-}" ]]        || { log_err "USB_MOUNT is empty in config.sh"; : $(( errors++ )); }
+    [[ -n "${LOCAL_STAGE_BASE:-}" ]] || { log_err "LOCAL_STAGE_BASE is empty in config.sh"; : $(( errors++ )); }
+    [[ -n "${BACKUP_ROOT:-}" ]]      || { log_err "BACKUP_ROOT is empty (derived from USB_MOUNT)"; : $(( errors++ )); }
 
     # --- Integers ---
     _is_pint "${KEEP_BACKUPS:-}" \
-        || { log_err "KEEP_BACKUPS must be an integer ≥ 1 (got '${KEEP_BACKUPS:-}')"; (( errors++ )); }
+        || { log_err "KEEP_BACKUPS must be an integer ≥ 1 (got '${KEEP_BACKUPS:-}')"; : $(( errors++ )); }
 
     # (VM_AGENT_KEEP_BUNDLES was removed in 3.6 — a leftover value in an old
     # config.sh is harmless and simply ignored.)
@@ -33,13 +33,13 @@ validate_config() {
                VM_AGENT_STAGE_MIN_FREE_KB LOCAL_STAGE_WARN_GB; do
         local val="${!var:-}"
         [[ -z "$val" ]] && continue   # optional — defaults applied elsewhere
-        _is_uint "$val" || { log_err "$var must be a non-negative integer (got '$val')"; (( errors++ )); }
+        _is_uint "$val" || { log_err "$var must be a non-negative integer (got '$val')"; : $(( errors++ )); }
     done
 
     # --- Booleans ---
     case "${BACKUP_ZFS:-true}" in
         true|false) ;;
-        *) log_err "BACKUP_ZFS must be 'true' or 'false' (got '${BACKUP_ZFS:-}')"; (( errors++ )) ;;
+        *) log_err "BACKUP_ZFS must be 'true' or 'false' (got '${BACKUP_ZFS:-}')"; : $(( errors++ )) ;;
     esac
 
     # --- TARGET_UUID format (if set) ---
@@ -53,9 +53,9 @@ validate_config() {
     local keep_min="${RCLONE_KEEP_MIN:-1}"
     local keep_max="${RCLONE_KEEP_MAX:-4}"
     local max_gb="${RCLONE_MAX_STORAGE_GB:-0}"
-    _is_uint "$keep_min" || { log_err "RCLONE_KEEP_MIN must be a non-negative integer (got '$keep_min')"; (( errors++ )); }
-    _is_uint "$keep_max" || { log_err "RCLONE_KEEP_MAX must be a non-negative integer (got '$keep_max')"; (( errors++ )); }
-    _is_uint "$max_gb"   || { log_err "RCLONE_MAX_STORAGE_GB must be a non-negative integer (got '$max_gb')"; (( errors++ )); }
+    _is_uint "$keep_min" || { log_err "RCLONE_KEEP_MIN must be a non-negative integer (got '$keep_min')"; : $(( errors++ )); }
+    _is_uint "$keep_max" || { log_err "RCLONE_KEEP_MAX must be a non-negative integer (got '$keep_max')"; : $(( errors++ )); }
+    _is_uint "$max_gb"   || { log_err "RCLONE_MAX_STORAGE_GB must be a non-negative integer (got '$max_gb')"; : $(( errors++ )); }
     if _is_uint "$keep_min" && _is_uint "$keep_max" && [[ $keep_max -gt 0 && $keep_min -gt $keep_max ]]; then
         log_warn "RCLONE_KEEP_MIN ($keep_min) > RCLONE_KEEP_MAX ($keep_max) — KEEP_MIN wins, max is effectively raised"
     fi
@@ -64,11 +64,11 @@ validate_config() {
     if [[ -n "${RCLONE_ENCRYPTION_METHOD:-}" ]]; then
         case "$RCLONE_ENCRYPTION_METHOD" in
             symmetric|gpg-key) ;;
-            *) log_err "RCLONE_ENCRYPTION_METHOD must be 'symmetric' or 'gpg-key' (got '$RCLONE_ENCRYPTION_METHOD')"; (( errors++ )) ;;
+            *) log_err "RCLONE_ENCRYPTION_METHOD must be 'symmetric' or 'gpg-key' (got '$RCLONE_ENCRYPTION_METHOD')"; : $(( errors++ )) ;;
         esac
         if [[ "$RCLONE_ENCRYPTION_METHOD" == "gpg-key" && -z "${RCLONE_ENCRYPTION_RECIPIENT:-}" ]]; then
             log_err "RCLONE_ENCRYPTION_METHOD=gpg-key requires RCLONE_ENCRYPTION_RECIPIENT (key id / email / fingerprint)"
-            (( errors++ ))
+            : $(( errors++ ))
         fi
     fi
 
@@ -80,15 +80,15 @@ validate_config() {
             read -r l h u p <<< "$entry"
             if [[ -z "$l" || -z "$h" || -z "$u" || -z "$p" ]]; then
                 log_err "VM_AGENTS entry malformed (need 'label host user path'): '$entry'"
-                (( errors++ )); continue
+                : $(( errors++ )); continue
             fi
             if [[ ! "$l" =~ ^[A-Za-z0-9._-]+$ ]]; then
                 log_err "VM_AGENTS label '$l' has unsafe characters (allowed: A-Z a-z 0-9 . _ -)"
-                (( errors++ ))
+                : $(( errors++ ))
             fi
             if [[ "$seen_labels" == *" $l "* ]]; then
                 log_err "VM_AGENTS has duplicate label '$l' — labels must be unique"
-                (( errors++ ))
+                : $(( errors++ ))
             fi
             seen_labels+="$l "
         done
