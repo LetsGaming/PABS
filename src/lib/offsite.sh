@@ -59,7 +59,7 @@ _offsite_file_sizes() {
     # rclone lsf --format "sp" → "<size>;<path>" per line
     rclone lsf "$remote_root" --files-only --format "sp" --separator ";" 2>/dev/null \
         | grep -E ';[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}\.tar\.zst(\.gpg)?$' \
-        | awk -F';' '{ size=$1; $1=""; sub(/^;/,""); print size" "$0 }' \
+        | awk -F';' '{ size=$1; sub(/^[^;]*;/,""); print size" "$0 }' \
         | sort -k2
 }
 

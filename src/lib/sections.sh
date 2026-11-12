@@ -374,11 +374,35 @@ section_vm_agents() {
         # -s (--protect-args) stops the remote shell from word-splitting or
         # glob-expanding the path, so filenames with spaces or metacharacters
         # are pulled intact rather than silently truncated at the first space.
+        # HAOS (Alpine SSH add-on) has no rsync. Without a fallback its bundle
+        # is never pulled. Stream it over ssh instead and compare byte counts.
+        local remote_has_rsync=false
+        ssh "${ssh_opts[@]}" "$ssh_user@$vm_host" "command -v rsync >/dev/null 2>&1" 2>/dev/null \
+            && remote_has_rsync=true
+
         local pull_ok=true
         for remote_file in "${remote_files[@]}"; do
-            if ! rsync -a -s -e "ssh ${ssh_opts[*]@Q}" \
-                    "$ssh_user@$vm_host:$remote_file" "$local_dest/" 2>>"$LOG"; then
-                log "  ✗  [$label] rsync failed for $(basename "$remote_file")"
+            if $remote_has_rsync; then
+                if ! rsync -a -s -e "ssh ${ssh_opts[*]@Q}" \
+                        "$ssh_user@$vm_host:$remote_file" "$local_dest/" 2>>"$LOG"; then
+                    log "  ✗  [$label] rsync failed for $(basename "$remote_file")"
+                    pull_ok=false
+                fi
+                continue
+            fi
+
+            local dest_file="$local_dest/$(basename "$remote_file")"
+            local want_bytes got_bytes
+            want_bytes=$(ssh "${ssh_opts[@]}" "$ssh_user@$vm_host" \
+                "wc -c < '$remote_file'" 2>>"$LOG" | tr -d '[:space:]')
+            if ssh "${ssh_opts[@]}" "$ssh_user@$vm_host" "cat '$remote_file'" \
+                    > "$dest_file" 2>>"$LOG" \
+                && got_bytes=$(wc -c < "$dest_file" | tr -d '[:space:]') \
+                && [[ "$want_bytes" =~ ^[0-9]+$ && "$got_bytes" == "$want_bytes" ]]; then
+                log "  ✓  [$label] pulled $(basename "$remote_file") via ssh (no rsync on remote)"
+            else
+                log "  ✗  [$label] ssh pull failed or size mismatch for $(basename "$remote_file")"
+                rm -f "$dest_file"
                 pull_ok=false
             fi
         done
